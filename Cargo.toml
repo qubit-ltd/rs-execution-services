@@ -18,12 +18,13 @@ name = "qubit_execution_services"
 doctest = true
 
 [dependencies]
-qubit-executor = { path = "../rs-executor" }
-qubit-function = { path = "../rs-function" }
-qubit-rayon-executor = { path = "../rs-rayon-executor" }
-qubit-thread-pool = { path = "../rs-thread-pool" }
-qubit-tokio-executor = { path = "../rs-tokio-executor" }
 thiserror = "2.0"
+
+qubit-function = "0.11"
+qubit-executor = "0.1"
+qubit-rayon-executor = "0.1"
+qubit-tokio-executor = "0.1"
+qubit-thread-pool = "0.1"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
