@@ -122,6 +122,8 @@ dependencies = [
 [[package]]
 name = "qubit-atomic"
 version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16d4f6fbee18962c1c619c432a4e6b60bc07077887da2bc196d26e82b51c23dc"
 dependencies = [
  "arc-swap",
  "portable-atomic",
@@ -142,7 +144,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-executor"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c4be87e6cf07a90116ad2e5f56f137c1604ca3dd8c3b51f1077c3f4aad984e82"
 dependencies = [
  "qubit-atomic",
  "qubit-function",
@@ -152,7 +156,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-function"
-version = "0.10.6"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75b0c1116f3b58ba20314ba96e24264991a9a58792fe05fa59b9bc912d305fdb"
 dependencies = [
  "parking_lot",
  "pastey",
@@ -160,7 +166,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-lock"
-version = "0.3.0"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "92014b046afa7334c115b6f7321cf907db78598f3fe927d8cb5a4582c6847b4f"
 dependencies = [
  "parking_lot",
  "tokio",
@@ -168,7 +176,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-rayon-executor"
-version = "0.1.0"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3028dcc3f254fec6ae2bfee46125e0adc5997ef7b2eb1c9a3c36298810d8971"
 dependencies = [
  "qubit-atomic",
  "qubit-executor",
@@ -181,6 +191,8 @@ dependencies = [
 [[package]]
 name = "qubit-thread-pool"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0b705b7849ead9b6de4b1aa1342b5d427c37afc12828e381b0add620c8f6cac2"
 dependencies = [
  "crossbeam-deque",
  "qubit-executor",
@@ -192,6 +204,8 @@ dependencies = [
 [[package]]
 name = "qubit-tokio-executor"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "764a673fe5677d7d99a6e71d0d3c9e6755a272a75b159eb76e62a7aaa01d360d"
 dependencies = [
  "qubit-atomic",
  "qubit-executor",

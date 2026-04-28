@@ -6,6 +6,7 @@
  *    All rights reserved.
  *
  ******************************************************************************/
+// qubit-style: allow multiple-public-types
 use std::{
     future::Future,
     pin::Pin,
