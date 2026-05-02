@@ -14,13 +14,14 @@
 //!
 
 mod execution_services;
+mod execution_services_build_error;
+mod execution_services_builder;
+mod execution_services_shutdown_report;
 
-pub use execution_services::{
-    ExecutionServices,
-    ExecutionServicesBuildError,
-    ExecutionServicesBuilder,
-    ExecutionServicesShutdownReport,
-};
+pub use execution_services::ExecutionServices;
+pub use execution_services_build_error::ExecutionServicesBuildError;
+pub use execution_services_builder::ExecutionServicesBuilder;
+pub use execution_services_shutdown_report::ExecutionServicesShutdownReport;
 pub use qubit_executor::TaskHandle;
 pub use qubit_executor::service::{
     ExecutorService,

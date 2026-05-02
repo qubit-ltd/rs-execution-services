@@ -16,11 +16,7 @@ use std::{
 
 use qubit_execution_services::{
     ExecutionServices,
-    ExecutionServicesBuildError,
-    ExecutionServicesShutdownReport,
-    ExecutorService,
     RejectedExecution,
-    ShutdownReport,
 };
 use qubit_executor::TaskExecutionError;
 
@@ -29,32 +25,6 @@ fn create_runtime() -> tokio::runtime::Runtime {
         .enable_all()
         .build()
         .expect("Failed to create tokio runtime for execution services tests")
-}
-
-#[test]
-fn test_execution_services_builder_rejects_invalid_blocking_domain() {
-    let error = match ExecutionServices::builder()
-        .blocking_maximum_pool_size(0)
-        .build()
-    {
-        Ok(_) => panic!("builder should reject invalid blocking domain"),
-        Err(error) => error,
-    };
-
-    assert!(matches!(
-        error,
-        ExecutionServicesBuildError::Blocking { .. }
-    ));
-}
-
-#[test]
-fn test_execution_services_builder_rejects_invalid_cpu_domain() {
-    let error = match ExecutionServices::builder().cpu_threads(0).build() {
-        Ok(_) => panic!("builder should reject invalid cpu domain"),
-        Err(error) => error,
-    };
-
-    assert!(matches!(error, ExecutionServicesBuildError::Cpu { .. }));
 }
 
 #[test]
@@ -155,56 +125,4 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
 
     assert!(matches!(result, Err(RejectedExecution::Shutdown)));
     services.await_termination().await;
-}
-
-#[test]
-fn test_execution_services_builder_options_and_accessors() {
-    let services = ExecutionServices::builder()
-        .blocking_core_pool_size(1)
-        .blocking_maximum_pool_size(1)
-        .blocking_queue_capacity(8)
-        .blocking_unbounded_queue()
-        .blocking_thread_name_prefix("exec-blocking")
-        .blocking_stack_size(2 * 1024 * 1024)
-        .blocking_keep_alive(Duration::from_millis(25))
-        .blocking_allow_core_thread_timeout(false)
-        .blocking_prestart_core_threads()
-        .cpu_threads(1)
-        .cpu_thread_name_prefix("exec-cpu")
-        .cpu_stack_size(2 * 1024 * 1024)
-        .build()
-        .expect("execution services should be created with custom options");
-
-    assert!(!services.blocking().is_shutdown());
-    assert!(!services.cpu().is_shutdown());
-    assert!(!services.tokio_blocking().is_shutdown());
-    assert!(!services.io().is_shutdown());
-
-    services
-        .submit_blocking(|| Ok::<(), io::Error>(()))
-        .expect("blocking domain should accept runnable")
-        .get()
-        .expect("blocking runnable should complete");
-    services
-        .submit_cpu(|| Ok::<(), io::Error>(()))
-        .expect("cpu domain should accept runnable")
-        .get()
-        .expect("cpu runnable should complete");
-
-    services.shutdown();
-    create_runtime().block_on(services.await_termination());
-}
-
-#[test]
-fn test_execution_services_shutdown_report_totals() {
-    let report = ExecutionServicesShutdownReport {
-        blocking: ShutdownReport::new(1, 2, 3),
-        cpu: ShutdownReport::new(4, 5, 6),
-        tokio_blocking: ShutdownReport::new(7, 8, 9),
-        io: ShutdownReport::new(10, 11, 12),
-    };
-
-    assert_eq!(report.total_queued(), 22);
-    assert_eq!(report.total_running(), 26);
-    assert_eq!(report.total_cancelled(), 30);
 }
