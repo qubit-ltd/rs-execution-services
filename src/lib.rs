@@ -1,9 +1,10 @@
 /*******************************************************************************
  *
- *    Copyright (c) 2025 - 2026.
- *    Haixing Hu, Qubit Co. Ltd.
+ *    Copyright (c) 2025 - 2026 Haixing Hu.
  *
- *    All rights reserved.
+ *    SPDX-License-Identifier: Apache-2.0
+ *
+ *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
 //! # Qubit Execution Services
@@ -11,9 +12,6 @@
 //! Aggregated execution services facade for blocking, CPU-bound, Tokio blocking,
 //! and async IO tasks.
 //!
-//! # Author
-//!
-//! Haixing Hu
 
 mod execution_services;
 
