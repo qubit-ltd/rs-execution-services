@@ -18,7 +18,12 @@ mod execution_services_build_error;
 mod execution_services_builder;
 mod execution_services_shutdown_report;
 
-pub use execution_services::ExecutionServices;
+pub use execution_services::{
+    BlockingExecutorService,
+    BlockingExecutorServiceBuilder,
+    ExecutionServices,
+    TokioBlockingExecutorService,
+};
 pub use execution_services_build_error::ExecutionServicesBuildError;
 pub use execution_services_builder::ExecutionServicesBuilder;
 pub use execution_services_shutdown_report::ExecutionServicesShutdownReport;
@@ -44,12 +49,3 @@ pub use qubit_tokio_executor::{
     TokioIoExecutorService,
     TokioTaskHandle,
 };
-
-/// Default managed service for synchronous tasks that may block an OS thread.
-pub type BlockingExecutorService = ThreadPool;
-
-/// Builder alias for configuring [`BlockingExecutorService`].
-pub type BlockingExecutorServiceBuilder = ThreadPoolBuilder;
-
-/// Tokio-backed blocking executor service routed through `spawn_blocking`.
-pub type TokioBlockingExecutorService = TokioExecutorService;

@@ -17,9 +17,13 @@ use qubit_function::{
     Callable,
     Runnable,
 };
+use qubit_thread_pool::{
+    ThreadPool,
+    ThreadPoolBuilder,
+};
+use qubit_tokio_executor::TokioExecutorService;
 
 use super::{
-    BlockingExecutorService,
     ExecutionServicesBuildError,
     ExecutionServicesBuilder,
     ExecutionServicesShutdownReport,
@@ -27,10 +31,18 @@ use super::{
     RayonExecutorService,
     RayonTaskHandle,
     RejectedExecution,
-    TokioBlockingExecutorService,
     TokioIoExecutorService,
     TokioTaskHandle,
 };
+
+/// Default managed service for synchronous tasks that may block an OS thread.
+pub type BlockingExecutorService = ThreadPool;
+
+/// Builder alias for configuring [`BlockingExecutorService`].
+pub type BlockingExecutorServiceBuilder = ThreadPoolBuilder;
+
+/// Tokio-backed blocking executor service routed through `spawn_blocking`.
+pub type TokioBlockingExecutorService = TokioExecutorService;
 
 /// Unified facade exposing separate execution domains through one owner.
 ///
