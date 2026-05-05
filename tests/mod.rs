@@ -7,6 +7,7 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
+mod execution_services_build_error_tests;
 mod execution_services_builder_tests;
 mod execution_services_shutdown_report_tests;
 mod execution_services_tests;
