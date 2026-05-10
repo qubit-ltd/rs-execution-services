@@ -16,36 +16,25 @@
 mod execution_services;
 mod execution_services_build_error;
 mod execution_services_builder;
-mod execution_services_shutdown_report;
+mod execution_services_stop_report;
 
 pub use execution_services::{
-    BlockingExecutorService,
-    BlockingExecutorServiceBuilder,
-    ExecutionServices,
+    BlockingExecutorService, BlockingExecutorServiceBuilder, ExecutionServices,
     TokioBlockingExecutorService,
 };
 pub use execution_services_build_error::ExecutionServicesBuildError;
 pub use execution_services_builder::ExecutionServicesBuilder;
-pub use execution_services_shutdown_report::ExecutionServicesShutdownReport;
-pub use qubit_executor::TaskHandle;
+pub use execution_services_stop_report::ExecutionServicesStopReport;
 pub use qubit_executor::service::{
-    ExecutorService,
-    RejectedExecution,
-    ShutdownReport,
+    ExecutorService, ExecutorServiceLifecycle, RejectedExecution, StopReport,
+};
+pub use qubit_executor::{
+    CancelResult, TaskHandle, TaskResult, TaskResultHandle, TaskStatus, TrackedTask,
+    TrackedTaskHandle, TryGet,
 };
 pub use qubit_rayon_executor::{
-    RayonExecutorService,
-    RayonExecutorServiceBuildError,
-    RayonExecutorServiceBuilder,
+    RayonExecutorService, RayonExecutorServiceBuildError, RayonExecutorServiceBuilder,
     RayonTaskHandle,
 };
-pub use qubit_thread_pool::{
-    ThreadPool,
-    ThreadPoolBuildError,
-    ThreadPoolBuilder,
-};
-pub use qubit_tokio_executor::{
-    TokioExecutorService,
-    TokioIoExecutorService,
-    TokioTaskHandle,
-};
+pub use qubit_thread_pool::{ThreadPool, ThreadPoolBuildError, ThreadPoolBuilder};
+pub use qubit_tokio_executor::{TokioExecutorService, TokioIoExecutorService, TokioTaskHandle};

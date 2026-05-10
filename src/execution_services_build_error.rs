@@ -11,10 +11,7 @@
 
 use thiserror::Error;
 
-use super::{
-    RayonExecutorServiceBuildError,
-    ThreadPoolBuildError,
-};
+use super::{RayonExecutorServiceBuildError, ThreadPoolBuildError};
 
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the facade.
 #[derive(Debug, Error)]

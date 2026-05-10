@@ -7,24 +7,24 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-//! Shutdown report for the execution-services facade.
+//! Stop report for the execution-services facade.
 
-use super::ShutdownReport;
+use super::StopReport;
 
-/// Aggregate report returned by [`super::ExecutionServices::shutdown_now`].
+/// Aggregate report returned by [`super::ExecutionServices::stop`].
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-pub struct ExecutionServicesShutdownReport {
-    /// Shutdown report for the blocking executor domain.
-    pub blocking: ShutdownReport,
-    /// Shutdown report for the CPU executor domain.
-    pub cpu: ShutdownReport,
-    /// Shutdown report for the Tokio blocking executor domain.
-    pub tokio_blocking: ShutdownReport,
-    /// Shutdown report for the Tokio async IO executor domain.
-    pub io: ShutdownReport,
+pub struct ExecutionServicesStopReport {
+    /// Stop report for the blocking executor domain.
+    pub blocking: StopReport,
+    /// Stop report for the CPU executor domain.
+    pub cpu: StopReport,
+    /// Stop report for the Tokio blocking executor domain.
+    pub tokio_blocking: StopReport,
+    /// Stop report for the Tokio async IO executor domain.
+    pub io: StopReport,
 }
 
-impl ExecutionServicesShutdownReport {
+impl ExecutionServicesStopReport {
     /// Returns the total queued task count across all execution domains.
     ///
     /// # Returns

@@ -9,5 +9,5 @@
  ******************************************************************************/
 mod execution_services_build_error_tests;
 mod execution_services_builder_tests;
-mod execution_services_shutdown_report_tests;
+mod execution_services_stop_report_tests;
 mod execution_services_tests;

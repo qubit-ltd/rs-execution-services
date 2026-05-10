@@ -19,11 +19,11 @@ Qubit Execution Services 把应用常用的 Qubit executor 实现装配到一起
 
 - 提供 `ExecutionServices` 门面，包含独立的 blocking、CPU、Tokio blocking 与 async IO 域。
 - 提供 `ExecutionServicesBuilder`，用于配置 blocking 线程池域与 CPU Rayon 域。
-- 提供 `submit_blocking` 与 `submit_blocking_callable`，用于通用同步 blocking 工作。
-- 提供 `submit_cpu` 与 `submit_cpu_callable`，用于路由到 Rayon 的 CPU 密集型工作。
-- 提供 `submit_tokio_blocking` 与 `submit_tokio_blocking_callable`，用于路由到 Tokio 的 blocking 函数。
+- 提供 `submit_blocking`、`submit_cpu` 与 `submit_tokio_blocking`，用于 fire-and-forget runnable 工作。
+- 提供 `submit_blocking_callable`、`submit_cpu_callable` 与 `submit_tokio_blocking_callable`，用于带返回值的 callable 工作。
+- 提供 `submit_tracked_*` 变体，用于需要状态或取消 handle 的工作。
 - 提供 `spawn_io`，用于路由到 Tokio async scheduler 的 async future。
-- 提供 `ExecutionServicesShutdownReport`，聚合所有执行域的 queued、running 与 cancelled 计数。
+- 提供 `ExecutionServicesStopReport`，聚合所有执行域的 queued、running 与 cancelled 计数。
 - 提供底层 executor service 与 task handle 的类型别名和 re-export。
 
 ## 执行域
@@ -46,7 +46,7 @@ builder 暴露常用 blocking 线程池配置，包括 pool size、core size、m
 
 `shutdown` 会对所有执行域请求有序关闭。新任务被拒绝，已接受任务按各底层服务的语义继续完成。
 
-`shutdown_now` 会对所有执行域请求立即关闭，并返回 `ExecutionServicesShutdownReport`，其中包含每个执行域一个 `ShutdownReport`。该报告还提供 `total_queued`、`total_running` 与 `total_cancelled` 辅助方法，用于聚合统计。
+`stop` 会对所有执行域请求强制停止，并返回 `ExecutionServicesStopReport`，其中包含每个执行域一个 `StopReport`。该报告还提供 `total_queued`、`total_running` 与 `total_cancelled` 辅助方法，用于聚合统计。
 
 `await_termination` 在所有底层服务都终止后完成。
 

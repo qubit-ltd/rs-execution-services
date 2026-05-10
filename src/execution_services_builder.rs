@@ -9,20 +9,12 @@
  ******************************************************************************/
 //! Builder for the execution-services facade.
 
-use std::{
-    thread,
-    time::Duration,
-};
+use std::{thread, time::Duration};
 
 use super::{
-    BlockingExecutorService,
-    BlockingExecutorServiceBuilder,
-    ExecutionServices,
-    ExecutionServicesBuildError,
-    RayonExecutorService,
-    RayonExecutorServiceBuilder,
-    TokioBlockingExecutorService,
-    TokioIoExecutorService,
+    BlockingExecutorService, BlockingExecutorServiceBuilder, ExecutionServices,
+    ExecutionServicesBuildError, RayonExecutorService, RayonExecutorServiceBuilder,
+    TokioBlockingExecutorService, TokioIoExecutorService,
 };
 
 /// Builder for [`ExecutionServices`].
