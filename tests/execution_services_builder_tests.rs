@@ -9,15 +9,10 @@
  ******************************************************************************/
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
-use std::{
-    io,
-    time::Duration,
-};
+use std::{io, time::Duration};
 
 use qubit_execution_services::{
-    ExecutionServices,
-    ExecutionServicesBuildError,
-    ExecutorService,
+    ExecutionServices, ExecutionServicesBuildError, ExecutorService, ExecutorServiceLifecycle,
 };
 
 fn create_runtime() -> tokio::runtime::Runtime {
@@ -71,18 +66,19 @@ fn test_execution_services_builder_options_and_accessors() {
         .build()
         .expect("execution services should be created with custom options");
 
-    assert!(!services.blocking().is_shutdown());
-    assert!(!services.cpu().is_shutdown());
-    assert!(!services.tokio_blocking().is_shutdown());
-    assert!(!services.io().is_shutdown());
+    assert!(!services.blocking().is_not_running());
+    assert!(!services.cpu().is_not_running());
+    assert!(!services.tokio_blocking().is_not_running());
+    assert!(!services.io().is_not_running());
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Running);
 
     services
-        .submit_blocking(|| Ok::<(), io::Error>(()))
+        .submit_tracked_blocking(|| Ok::<(), io::Error>(()))
         .expect("blocking domain should accept runnable")
         .get()
         .expect("blocking runnable should complete");
     services
-        .submit_cpu(|| Ok::<(), io::Error>(()))
+        .submit_tracked_cpu(|| Ok::<(), io::Error>(()))
         .expect("cpu domain should accept runnable")
         .get()
         .expect("cpu runnable should complete");

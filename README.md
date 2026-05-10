@@ -24,11 +24,11 @@ abstraction layer. Libraries should usually depend on smaller crates such as
 
 - `ExecutionServices` facade with separate blocking, CPU, Tokio blocking, and async IO domains.
 - `ExecutionServicesBuilder` for configuring the blocking thread-pool domain and CPU Rayon domain.
-- `submit_blocking` and `submit_blocking_callable` for general synchronous blocking work.
-- `submit_cpu` and `submit_cpu_callable` for CPU-bound work routed to Rayon.
-- `submit_tokio_blocking` and `submit_tokio_blocking_callable` for blocking functions routed through Tokio.
+- `submit_blocking`, `submit_cpu`, and `submit_tokio_blocking` for fire-and-forget runnable work.
+- `submit_blocking_callable`, `submit_cpu_callable`, and `submit_tokio_blocking_callable` for result-bearing callable work.
+- `submit_tracked_*` variants for work that needs status or cancellation handles.
 - `spawn_io` for async futures routed through Tokio's async scheduler.
-- `ExecutionServicesShutdownReport` for aggregating queued, running, and cancelled counts across all domains.
+- `ExecutionServicesStopReport` for aggregating queued, running, and cancelled counts across all domains.
 - Type aliases and re-exports for the underlying executor services and task handles.
 
 ## Execution Domains
@@ -65,8 +65,8 @@ for Rayon worker count, thread-name prefix, and stack size.
 `shutdown` requests orderly shutdown for every domain. New tasks are rejected,
 and accepted work is allowed to complete according to each underlying service.
 
-`shutdown_now` requests immediate shutdown for every domain and returns an
-`ExecutionServicesShutdownReport` containing one `ShutdownReport` per domain.
+`stop` requests abrupt stop for every domain and returns an
+`ExecutionServicesStopReport` containing one `StopReport` per domain.
 The report also provides `total_queued`, `total_running`, and `total_cancelled`
 helpers for aggregate accounting.
 

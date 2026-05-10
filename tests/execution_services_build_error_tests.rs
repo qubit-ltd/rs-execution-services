@@ -11,10 +11,7 @@
 
 use std::error::Error;
 
-use qubit_execution_services::{
-    ExecutionServices,
-    ExecutionServicesBuildError,
-};
+use qubit_execution_services::{ExecutionServices, ExecutionServicesBuildError};
 
 /// Test build error variants expose the underlying builder failure.
 #[test]

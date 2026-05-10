@@ -9,15 +9,9 @@
  ******************************************************************************/
 //! Tests for [`ExecutionServices`](qubit_execution_services::ExecutionServices).
 
-use std::{
-    io,
-    time::Duration,
-};
+use std::{io, time::Duration};
 
-use qubit_execution_services::{
-    ExecutionServices,
-    RejectedExecution,
-};
+use qubit_execution_services::{ExecutionServices, ExecutorServiceLifecycle, RejectedExecution};
 use qubit_executor::TaskExecutionError;
 
 fn create_runtime() -> tokio::runtime::Runtime {
@@ -34,6 +28,7 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
         .cpu_threads(1)
         .build()
         .expect("execution services should be created");
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Running);
 
     let blocking = services
         .submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
@@ -53,9 +48,11 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
         42
     );
     services.shutdown();
+    assert!(services.is_not_running());
     create_runtime().block_on(services.await_termination());
-    assert!(services.is_shutdown());
+    assert!(services.is_not_running());
     assert!(services.is_terminated());
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
 #[tokio::test]
@@ -81,7 +78,7 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
 }
 
 #[tokio::test]
-async fn test_execution_services_shutdown_now_aggregates_reports() {
+async fn test_execution_services_stop_aggregates_reports() {
     let services = ExecutionServices::builder()
         .blocking_pool_size(1)
         .cpu_threads(1)
@@ -89,7 +86,7 @@ async fn test_execution_services_shutdown_now_aggregates_reports() {
         .expect("execution services should be created");
 
     let blocking = services
-        .submit_tokio_blocking(|| {
+        .submit_tracked_tokio_blocking(|| {
             std::thread::sleep(Duration::from_secs(1));
             Ok::<(), io::Error>(())
         })
@@ -102,12 +99,13 @@ async fn test_execution_services_shutdown_now_aggregates_reports() {
         .expect("io domain should accept task");
 
     tokio::task::yield_now().await;
-    let report = services.shutdown_now();
+    let report = services.stop();
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     services.await_termination().await;
 
     assert!(report.total_running() >= 2);
     assert!(report.total_cancelled() >= 2);
-    assert!(services.is_shutdown());
+    assert!(services.is_not_running());
     assert!(services.is_terminated());
     assert!(matches!(
         blocking.await,
@@ -125,4 +123,5 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
 
     assert!(matches!(result, Err(RejectedExecution::Shutdown)));
     services.await_termination().await;
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
