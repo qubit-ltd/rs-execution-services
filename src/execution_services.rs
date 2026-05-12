@@ -7,17 +7,37 @@
  *    Licensed under the Apache License, Version 2.0.
  *
  ******************************************************************************/
-use std::{future::Future, pin::Pin};
+use std::{
+    future::Future,
+    pin::Pin,
+    sync::Arc,
+};
 
-use qubit_executor::{TaskHandle, TrackedTask};
-use qubit_function::{Callable, Runnable};
-use qubit_thread_pool::{ThreadPool, ThreadPoolBuilder};
+use qubit_executor::{
+    TaskHandle,
+    TrackedTask,
+};
+use qubit_function::{
+    Callable,
+    Runnable,
+};
+use qubit_thread_pool::{
+    ThreadPool,
+    ThreadPoolBuilder,
+};
 use qubit_tokio_executor::TokioExecutorService;
 
 use super::{
-    ExecutionServicesBuildError, ExecutionServicesBuilder, ExecutionServicesStopReport,
-    ExecutorService, ExecutorServiceLifecycle, RayonExecutorService, RayonTaskHandle,
-    RejectedExecution, TokioIoExecutorService, TokioTaskHandle,
+    ExecutionServicesBuildError,
+    ExecutionServicesBuilder,
+    ExecutionServicesStopReport,
+    ExecutorService,
+    ExecutorServiceLifecycle,
+    RayonExecutorService,
+    RayonTaskHandle,
+    SubmissionError,
+    TokioIoExecutorService,
+    TokioTaskHandle,
 };
 
 /// Default managed service for synchronous tasks that may block an OS thread.
@@ -40,7 +60,7 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// - `io`: async futures spawned on Tokio's async runtime.
 pub struct ExecutionServices {
     /// Managed service for synchronous tasks that may block OS threads.
-    blocking: BlockingExecutorService,
+    blocking: Arc<BlockingExecutorService>,
     /// Managed service for CPU-bound synchronous tasks.
     cpu: RayonExecutorService,
     /// Tokio-backed blocking service using `spawn_blocking`.
@@ -69,7 +89,7 @@ impl ExecutionServices {
         io: TokioIoExecutorService,
     ) -> Self {
         Self {
-            blocking,
+            blocking: Arc::new(blocking),
             cpu,
             tokio_blocking,
             io,
@@ -109,7 +129,7 @@ impl ExecutionServices {
     /// A shared reference to the blocking executor service.
     #[inline]
     pub fn blocking(&self) -> &BlockingExecutorService {
-        &self.blocking
+        self.blocking.as_ref()
     }
 
     /// Returns the CPU execution domain.
@@ -154,9 +174,9 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the blocking domain refuses the task.
+    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
-    pub fn submit_blocking<T, E>(&self, task: T) -> Result<(), RejectedExecution>
+    pub fn submit_blocking<T, E>(&self, task: T) -> Result<(), SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -176,12 +196,12 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the blocking domain refuses the task.
+    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
     pub fn submit_tracked_blocking<T, E>(
         &self,
         task: T,
-    ) -> Result<TrackedTask<(), E>, RejectedExecution>
+    ) -> Result<TrackedTask<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -201,12 +221,12 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the blocking domain refuses the task.
+    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
     pub fn submit_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TaskHandle<R, E>, RejectedExecution>
+    ) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -227,12 +247,12 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the blocking domain refuses the task.
+    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
     pub fn submit_tracked_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TrackedTask<R, E>, RejectedExecution>
+    ) -> Result<TrackedTask<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -253,9 +273,9 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the CPU domain refuses the task.
+    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
-    pub fn submit_cpu<T, E>(&self, task: T) -> Result<(), RejectedExecution>
+    pub fn submit_cpu<T, E>(&self, task: T) -> Result<(), SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -275,12 +295,12 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the CPU domain refuses the task.
+    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
     pub fn submit_tracked_cpu<T, E>(
         &self,
         task: T,
-    ) -> Result<RayonTaskHandle<(), E>, RejectedExecution>
+    ) -> Result<RayonTaskHandle<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -300,12 +320,9 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the CPU domain refuses the task.
+    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
-    pub fn submit_cpu_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<TaskHandle<R, E>, RejectedExecution>
+    pub fn submit_cpu_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -326,12 +343,12 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the CPU domain refuses the task.
+    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
     pub fn submit_tracked_cpu_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<RayonTaskHandle<R, E>, RejectedExecution>
+    ) -> Result<RayonTaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -352,10 +369,10 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the Tokio blocking domain refuses the
+    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
-    pub fn submit_tokio_blocking<T, E>(&self, task: T) -> Result<(), RejectedExecution>
+    pub fn submit_tokio_blocking<T, E>(&self, task: T) -> Result<(), SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -375,13 +392,13 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the Tokio blocking domain refuses the
+    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
     pub fn submit_tracked_tokio_blocking<T, E>(
         &self,
         task: T,
-    ) -> Result<TrackedTask<(), E>, RejectedExecution>
+    ) -> Result<TrackedTask<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -401,13 +418,13 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the Tokio blocking domain refuses the
+    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
     pub fn submit_tokio_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TaskHandle<R, E>, RejectedExecution>
+    ) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -428,13 +445,13 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the Tokio blocking domain refuses the
+    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
     pub fn submit_tracked_tokio_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TrackedTask<R, E>, RejectedExecution>
+    ) -> Result<TrackedTask<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -455,9 +472,9 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`RejectedExecution`] if the Tokio IO domain refuses the task.
+    /// Returns [`SubmissionError`] if the Tokio IO domain refuses the task.
     #[inline]
-    pub fn spawn_io<F, R, E>(&self, future: F) -> Result<TokioTaskHandle<R, E>, RejectedExecution>
+    pub fn spawn_io<F, R, E>(&self, future: F) -> Result<TokioTaskHandle<R, E>, SubmissionError>
     where
         F: Future<Output = Result<R, E>> + Send + 'static,
         R: Send + 'static,
@@ -581,10 +598,17 @@ impl ExecutionServices {
     /// A future that resolves after all execution domains have terminated.
     pub fn await_termination(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
-            self.blocking.await_termination().await;
-            self.cpu.await_termination().await;
-            self.tokio_blocking.await_termination().await;
+            let blocking = Arc::clone(&self.blocking);
+            let cpu = self.cpu.clone();
+            let tokio_blocking = self.tokio_blocking.clone();
+            let blocking_wait = tokio::task::spawn_blocking(move || blocking.wait_termination());
+            let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
+            let tokio_blocking_wait =
+                tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
             self.io.await_termination().await;
+            let _ = blocking_wait.await;
+            let _ = cpu_wait.await;
+            let _ = tokio_blocking_wait.await;
         })
     }
 }

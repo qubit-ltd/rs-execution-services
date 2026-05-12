@@ -11,7 +11,10 @@
 
 use thiserror::Error;
 
-use super::{RayonExecutorServiceBuildError, ThreadPoolBuildError};
+use super::{
+    ExecutorServiceBuilderError,
+    RayonExecutorServiceBuildError,
+};
 
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the facade.
 #[derive(Debug, Error)]
@@ -21,7 +24,7 @@ pub enum ExecutionServicesBuildError {
     Blocking {
         /// Error returned by the underlying blocking executor builder.
         #[from]
-        source: ThreadPoolBuildError,
+        source: ExecutorServiceBuilderError,
     },
 
     /// The CPU executor-service configuration is invalid.
