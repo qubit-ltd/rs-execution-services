@@ -12,6 +12,16 @@ documentation = "https://docs.rs/qubit-execution-services"
 readme = "README.md"
 keywords = ["executor", "service", "tokio", "rayon", "thread-pool"]
 categories = ["concurrency", "asynchronous"]
+exclude = [
+    "align-ci.sh",
+    "ci-check.sh",
+    "coverage.sh",
+    "style-check.sh",
+    "update-submodule.sh",
+    ".github/*",
+    ".llvm-cov.toml",
+    ".cargo-audit.toml.example",
+]
 
 [lib]
 name = "qubit_execution_services"
@@ -22,7 +32,7 @@ thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt"] }
 
 qubit-function = "0.13"
-qubit-executor = { version = "0.3.1", path = "../rs-executor" }
+qubit-executor = { version = "0.3", path = "../rs-executor" }
 qubit-rayon-executor = { path = "../rs-rayon-executor" }
 qubit-tokio-executor = { path = "../rs-tokio-executor" }
 qubit-thread-pool = { path = "../rs-thread-pool" }
