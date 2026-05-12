@@ -9,7 +9,10 @@
  ******************************************************************************/
 //! Tests for [`ExecutionServicesStopReport`].
 
-use qubit_execution_services::{ExecutionServicesStopReport, StopReport};
+use qubit_execution_services::{
+    ExecutionServicesStopReport,
+    StopReport,
+};
 
 #[test]
 fn test_execution_services_stop_report_totals() {

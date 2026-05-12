@@ -9,10 +9,16 @@
  ******************************************************************************/
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
-use std::{io, time::Duration};
+use std::{
+    io,
+    time::Duration,
+};
 
 use qubit_execution_services::{
-    ExecutionServices, ExecutionServicesBuildError, ExecutorService, ExecutorServiceLifecycle,
+    ExecutionServices,
+    ExecutionServicesBuildError,
+    ExecutorService,
+    ExecutorServiceLifecycle,
 };
 
 fn create_runtime() -> tokio::runtime::Runtime {

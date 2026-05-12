@@ -19,12 +19,16 @@ doctest = true
 
 [dependencies]
 thiserror = "2.0"
+tokio = { version = "1.52", features = ["rt"] }
 
 qubit-function = "0.13"
-qubit-executor = { path = "../rs-executor" }
+qubit-executor = { version = "0.3.1", path = "../rs-executor" }
 qubit-rayon-executor = { path = "../rs-rayon-executor" }
 qubit-tokio-executor = { path = "../rs-tokio-executor" }
 qubit-thread-pool = { path = "../rs-thread-pool" }
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
+
+[patch.crates-io]
+qubit-executor = { version = "0.3.1", path = "../rs-executor" }
