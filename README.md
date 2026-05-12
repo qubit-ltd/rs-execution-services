@@ -1,6 +1,6 @@
 # Qubit Execution Services
 
-[![CircleCI](https://circleci.com/gh/qubit-ltd/rs-execution-services.svg?style=shield)](https://circleci.com/gh/qubit-ltd/rs-execution-services)
+[![Rust CI](https://github.com/qubit-ltd/rs-execution-services/actions/workflows/ci.yml/badge.svg)](https://github.com/qubit-ltd/rs-execution-services/actions/workflows/ci.yml)
 [![Coverage Status](https://coveralls.io/repos/github/qubit-ltd/rs-execution-services/badge.svg?branch=main)](https://coveralls.io/github/qubit-ltd/rs-execution-services?branch=main)
 [![Crates.io](https://img.shields.io/crates/v/qubit-execution-services.svg?color=blue)](https://crates.io/crates/qubit-execution-services)
 [![Rust](https://img.shields.io/badge/rust-1.94+-blue.svg?logo=rust)](https://www.rust-lang.org)
