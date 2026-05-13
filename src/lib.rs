@@ -57,6 +57,7 @@ pub use qubit_thread_pool::{
     ThreadPoolBuilder,
 };
 pub use qubit_tokio_executor::{
+    TokioBlockingTaskHandle,
     TokioExecutorService,
     TokioIoExecutorService,
     TokioTaskHandle,

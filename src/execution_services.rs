@@ -36,6 +36,7 @@ use super::{
     RayonExecutorService,
     RayonTaskHandle,
     SubmissionError,
+    TokioBlockingTaskHandle,
     TokioIoExecutorService,
     TokioTaskHandle,
 };
@@ -388,7 +389,7 @@ impl ExecutionServices {
     ///
     /// # Returns
     ///
-    /// A [`TrackedTask`] for the accepted blocking task.
+    /// A [`TokioBlockingTaskHandle`] for the accepted blocking task.
     ///
     /// # Errors
     ///
@@ -398,7 +399,7 @@ impl ExecutionServices {
     pub fn submit_tracked_tokio_blocking<T, E>(
         &self,
         task: T,
-    ) -> Result<TrackedTask<(), E>, SubmissionError>
+    ) -> Result<TokioBlockingTaskHandle<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -441,7 +442,7 @@ impl ExecutionServices {
     ///
     /// # Returns
     ///
-    /// A [`TrackedTask`] for the accepted blocking task.
+    /// A [`TokioBlockingTaskHandle`] for the accepted blocking task.
     ///
     /// # Errors
     ///
@@ -451,7 +452,7 @@ impl ExecutionServices {
     pub fn submit_tracked_tokio_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TrackedTask<R, E>, SubmissionError>
+    ) -> Result<TokioBlockingTaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
