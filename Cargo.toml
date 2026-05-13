@@ -32,13 +32,10 @@ thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt"] }
 
 qubit-function = "0.13"
-qubit-executor = { version = "0.3" }
-qubit-rayon-executor = { path = "../rs-rayon-executor" }
-qubit-tokio-executor = { path = "../rs-tokio-executor" }
-qubit-thread-pool = { path = "../rs-thread-pool" }
+qubit-executor = "0.3"
+qubit-rayon-executor = "0.2"
+qubit-tokio-executor = "0.2"
+qubit-thread-pool = "0.3"
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
-
-[patch.crates-io]
-qubit-executor = { version = "0.3.1", path = "../rs-executor" }
