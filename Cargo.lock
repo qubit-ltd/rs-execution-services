@@ -663,7 +663,7 @@ checksum = "7d469a0405040734040db3479b6c5c47188fc2ea05258d9db51a9c12601e1466"
 
 [[package]]
 name = "qubit-execution-services"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "qubit-executor",
  "qubit-function",
@@ -765,9 +765,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-thread-pool"
-version = "0.4.0"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "16a51ec543580e92b9aaf669405956c179fcb48a27c364b9a84b514ac0b79873"
+checksum = "5111db203c69dd280f014543fdb79e7c3d9d38c151ad55424db83a4386e262c0"
 dependencies = [
  "crossbeam-deque",
  "qubit-executor",
@@ -778,9 +778,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-tokio-executor"
-version = "0.3.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15913bde6b944cd2ab25774e03420ac2be539f6a53af45656671883ed439d3d7"
+checksum = "a9a8abd3b6121d65a4a406f65132af84d47b21a8bc219b2c57152da448a87369"
 dependencies = [
  "qubit-atomic",
  "qubit-executor",
