@@ -251,7 +251,10 @@ async fn test_execution_services_stop_aggregates_reports() {
 
     let total_active = report.total_queued() + report.total_running();
     assert!(total_active >= 2);
-    assert!(report.total_cancelled() >= 2);
+    assert!(report.tokio_blocking.queued + report.tokio_blocking.running >= 1);
+    assert!(report.io.running >= 1);
+    assert!(report.io.cancelled >= 1);
+    assert!(report.total_cancelled() >= 1);
     assert!(services.is_not_running());
     assert!(services.is_terminated());
     assert!(matches!(

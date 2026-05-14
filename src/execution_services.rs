@@ -11,6 +11,7 @@ use std::{
     future::Future,
     pin::Pin,
     sync::Arc,
+    time::Duration,
 };
 
 use qubit_executor::{
@@ -606,7 +607,9 @@ impl ExecutionServices {
             let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
             let tokio_blocking_wait =
                 tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
-            self.io.await_termination().await;
+            while !self.io.is_terminated() {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
             let _ = blocking_wait.await;
             let _ = cpu_wait.await;
             let _ = tokio_blocking_wait.await;
