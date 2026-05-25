@@ -249,12 +249,7 @@ impl ExecutionServicesBuilder {
             .map_err(|source| ExecutionServicesBuildError::Cpu { source })?;
         let tokio_blocking = TokioBlockingExecutorService::new();
         let io = TokioIoExecutorService::new();
-        Ok(ExecutionServices::from_parts(
-            blocking,
-            cpu,
-            tokio_blocking,
-            io,
-        ))
+        Ok(ExecutionServices::from_parts(blocking, cpu, tokio_blocking, io))
     }
 }
 
@@ -280,7 +275,5 @@ impl Default for ExecutionServicesBuilder {
 ///
 /// The available CPU parallelism, or `1` if it cannot be detected.
 fn default_pool_size() -> usize {
-    thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+    thread::available_parallelism().map(usize::from).unwrap_or(1)
 }

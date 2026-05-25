@@ -19,18 +19,12 @@ use qubit_execution_services::{
 /// Test build error variants expose the underlying builder failure.
 #[test]
 fn test_execution_services_build_error_display_and_source() {
-    let blocking_error = match ExecutionServices::builder()
-        .blocking_maximum_pool_size(0)
-        .build()
-    {
+    let blocking_error = match ExecutionServices::builder().blocking_maximum_pool_size(0).build() {
         Ok(_) => panic!("invalid blocking pool size should fail"),
         Err(error) => error,
     };
 
-    assert!(matches!(
-        blocking_error,
-        ExecutionServicesBuildError::Blocking { .. }
-    ));
+    assert!(matches!(blocking_error, ExecutionServicesBuildError::Blocking { .. }));
     assert!(
         blocking_error
             .to_string()
