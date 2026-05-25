@@ -52,9 +52,6 @@ impl ExecutionServicesStopReport {
     /// The sum of every domain's cancelled-task count.
     #[inline]
     pub const fn total_cancelled(&self) -> usize {
-        self.blocking.cancelled
-            + self.cpu.cancelled
-            + self.tokio_blocking.cancelled
-            + self.io.cancelled
+        self.blocking.cancelled + self.cpu.cancelled + self.tokio_blocking.cancelled + self.io.cancelled
     }
 }

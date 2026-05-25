@@ -200,10 +200,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
-    pub fn submit_tracked_blocking<T, E>(
-        &self,
-        task: T,
-    ) -> Result<TrackedTask<(), E>, SubmissionError>
+    pub fn submit_tracked_blocking<T, E>(&self, task: T) -> Result<TrackedTask<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -225,10 +222,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
-    pub fn submit_blocking_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_blocking_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -251,10 +245,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the blocking domain refuses the task.
     #[inline]
-    pub fn submit_tracked_blocking_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<TrackedTask<R, E>, SubmissionError>
+    pub fn submit_tracked_blocking_callable<C, R, E>(&self, task: C) -> Result<TrackedTask<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -299,10 +290,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
-    pub fn submit_tracked_cpu<T, E>(
-        &self,
-        task: T,
-    ) -> Result<RayonTaskHandle<(), E>, SubmissionError>
+    pub fn submit_tracked_cpu<T, E>(&self, task: T) -> Result<RayonTaskHandle<(), E>, SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -347,10 +335,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
-    pub fn submit_tracked_cpu_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<RayonTaskHandle<R, E>, SubmissionError>
+    pub fn submit_tracked_cpu_callable<C, R, E>(&self, task: C) -> Result<RayonTaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -423,10 +408,7 @@ impl ExecutionServices {
     /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
-    pub fn submit_tokio_blocking_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_tokio_blocking_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -605,8 +587,7 @@ impl ExecutionServices {
             let tokio_blocking = self.tokio_blocking.clone();
             let blocking_wait = tokio::task::spawn_blocking(move || blocking.wait_termination());
             let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
-            let tokio_blocking_wait =
-                tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
+            let tokio_blocking_wait = tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
             while !self.io.is_terminated() {
                 tokio::time::sleep(Duration::from_millis(10)).await;
             }
