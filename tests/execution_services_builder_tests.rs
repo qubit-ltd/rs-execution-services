@@ -1,12 +1,10 @@
-/*******************************************************************************
- *
- *    Copyright (c) 2025 - 2026 Haixing Hu.
- *
- *    SPDX-License-Identifier: Apache-2.0
- *
- *    Licensed under the Apache License, Version 2.0.
- *
- ******************************************************************************/
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
 use std::{
@@ -30,12 +28,18 @@ fn create_runtime() -> tokio::runtime::Runtime {
 
 #[test]
 fn test_execution_services_builder_rejects_invalid_blocking_domain() {
-    let error = match ExecutionServices::builder().blocking_maximum_pool_size(0).build() {
+    let error = match ExecutionServices::builder()
+        .blocking_maximum_pool_size(0)
+        .build()
+    {
         Ok(_) => panic!("builder should reject invalid blocking domain"),
         Err(error) => error,
     };
 
-    assert!(matches!(error, ExecutionServicesBuildError::Blocking { .. }));
+    assert!(matches!(
+        error,
+        ExecutionServicesBuildError::Blocking { .. }
+    ));
 }
 
 #[test]
