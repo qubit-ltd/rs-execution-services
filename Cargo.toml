@@ -34,11 +34,11 @@ doctest = true
 thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt", "time"] }
 
-qubit-function = "0.15"
-qubit-executor = "0.7"
-qubit-rayon-executor = "0.6"
-qubit-tokio-executor = "0.8"
-qubit-thread-pool = "0.9"
+qubit-function = { version = "0.16.0", path = "../rs-function" }
+qubit-executor = { version = "0.7", path = "../rs-executor" }
+qubit-rayon-executor = { version = "0.6", path = "../rs-rayon-executor" }
+qubit-tokio-executor = { version = "0.8", path = "../rs-tokio-executor" }
+qubit-thread-pool = { version = "0.9", path = "../rs-thread-pool" }
 
 [dev-dependencies]
 tokio = { version = "1.52", features = ["macros", "rt-multi-thread", "time"] }
