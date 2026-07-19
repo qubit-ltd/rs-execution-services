@@ -34,7 +34,7 @@ doctest = true
 thiserror = "2.0"
 tokio = { version = "1.52", features = ["rt", "time"] }
 
-qubit-function = { version = "0.16.0", path = "../rs-function" }
+qubit-function = "0.16"
 qubit-executor = { version = "0.7", path = "../rs-executor" }
 qubit-rayon-executor = { version = "0.6", path = "../rs-rayon-executor" }
 qubit-tokio-executor = { version = "0.8", path = "../rs-tokio-executor" }
