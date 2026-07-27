@@ -30,10 +30,7 @@ impl ExecutionServicesStopReport {
     /// The sum of every domain's queued-task count.
     #[inline]
     pub const fn total_queued(&self) -> usize {
-        self.blocking.queued
-            + self.cpu.queued
-            + self.tokio_blocking.queued
-            + self.io.queued
+        self.blocking.queued + self.cpu.queued + self.tokio_blocking.queued + self.io.queued
     }
 
     /// Returns the total running task count across all execution domains.
@@ -43,10 +40,7 @@ impl ExecutionServicesStopReport {
     /// The sum of every domain's running-task count.
     #[inline]
     pub const fn total_running(&self) -> usize {
-        self.blocking.running
-            + self.cpu.running
-            + self.tokio_blocking.running
-            + self.io.running
+        self.blocking.running + self.cpu.running + self.tokio_blocking.running + self.io.running
     }
 
     /// Returns the total cancellation count across all execution domains.

@@ -7,17 +7,10 @@
 // =============================================================================
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
-use std::{
-    io,
-    time::Duration,
-};
+use std::{io, time::Duration};
 
-use qubit_execution_services::{
-    ExecutionServices,
-    ExecutionServicesBuildError,
-    ExecutorService,
-    ExecutorServiceLifecycle,
-};
+use qubit_execution_services::{ExecutionServices, ExecutionServicesBuildError};
+use qubit_executor::service::{ExecutorService, ExecutorServiceLifecycle};
 
 fn create_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()

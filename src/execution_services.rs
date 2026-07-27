@@ -5,39 +5,17 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-use std::{
-    future::Future,
-    pin::Pin,
-    sync::Arc,
-    time::Duration,
-};
+use std::{future::Future, pin::Pin, sync::Arc};
 
-use qubit_executor::{
-    TaskHandle,
-    TrackedTask,
-};
-use qubit_function::{
-    Callable,
-    Runnable,
-};
-use qubit_thread_pool::{
-    ThreadPool,
-    ThreadPoolBuilder,
-};
+use qubit_executor::{TaskHandle, TrackedTask};
+use qubit_function::{Callable, Runnable};
+use qubit_thread_pool::{ThreadPool, ThreadPoolBuilder};
 use qubit_tokio_executor::TokioExecutorService;
 
 use super::{
-    ExecutionServicesBuildError,
-    ExecutionServicesBuilder,
-    ExecutionServicesStopReport,
-    ExecutorService,
-    ExecutorServiceLifecycle,
-    RayonExecutorService,
-    RayonTaskHandle,
-    SubmissionError,
-    TokioBlockingTaskHandle,
-    TokioIoExecutorService,
-    TokioTaskHandle,
+    ExecutionServicesBuildError, ExecutionServicesBuilder, ExecutionServicesStopReport,
+    ExecutorService, ExecutorServiceLifecycle, RayonExecutorService, RayonTaskHandle,
+    SubmissionError, TokioBlockingTaskHandle, TokioIoExecutorService, TokioTaskHandle,
 };
 
 /// Default managed service for synchronous tasks that may block an OS thread.
@@ -322,10 +300,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the CPU domain refuses the task.
     #[inline]
-    pub fn submit_cpu_callable<C, R, E>(
-        &self,
-        task: C,
-    ) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_cpu_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
@@ -375,10 +350,7 @@ impl ExecutionServices {
     /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
     /// task.
     #[inline]
-    pub fn submit_tokio_blocking<T, E>(
-        &self,
-        task: T,
-    ) -> Result<(), SubmissionError>
+    pub fn submit_tokio_blocking<T, E>(&self, task: T) -> Result<(), SubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
@@ -480,10 +452,7 @@ impl ExecutionServices {
     ///
     /// Returns [`SubmissionError`] if the Tokio IO domain refuses the task.
     #[inline]
-    pub fn spawn_io<F, R, E>(
-        &self,
-        future: F,
-    ) -> Result<TokioTaskHandle<R, E>, SubmissionError>
+    pub fn spawn_io<F, R, E>(&self, future: F) -> Result<TokioTaskHandle<R, E>, SubmissionError>
     where
         F: Future<Output = Result<R, E>> + Send + 'static,
         R: Send + 'static,
@@ -605,24 +574,16 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A future that resolves after all execution domains have terminated.
-    pub fn await_termination(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    pub fn await_termination(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let blocking = Arc::clone(&self.blocking);
             let cpu = self.cpu.clone();
             let tokio_blocking = self.tokio_blocking.clone();
-            let blocking_wait = tokio::task::spawn_blocking(move || {
-                blocking.wait_termination()
-            });
-            let cpu_wait =
-                tokio::task::spawn_blocking(move || cpu.wait_termination());
-            let tokio_blocking_wait = tokio::task::spawn_blocking(move || {
-                tokio_blocking.wait_termination()
-            });
-            while !self.io.is_terminated() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
+            let blocking_wait = tokio::task::spawn_blocking(move || blocking.wait_termination());
+            let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
+            let tokio_blocking_wait =
+                tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
+            self.io.await_termination().await;
             let _ = blocking_wait.await;
             let _ = cpu_wait.await;
             let _ = tokio_blocking_wait.await;
