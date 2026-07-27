@@ -7,18 +7,13 @@
 // =============================================================================
 //! Tests for [`ExecutionServices`](qubit_execution_services::ExecutionServices).
 
-use std::{
-    io,
-    sync::mpsc,
-    time::Duration,
-};
+use std::{io, sync::mpsc, time::Duration};
 
-use qubit_execution_services::{
-    ExecutionServices,
-    ExecutorServiceLifecycle,
-    SubmissionError,
+use qubit_execution_services::ExecutionServices;
+use qubit_executor::{
+    TaskExecutionError,
+    service::{ExecutorServiceLifecycle, SubmissionError},
 };
-use qubit_executor::TaskExecutionError;
 
 fn create_runtime() -> tokio::runtime::Runtime {
     tokio::runtime::Builder::new_current_thread()
@@ -159,8 +154,7 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
 
 #[tokio::test]
 async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
-    let services =
-        ExecutionServices::new().expect("execution services should be created");
+    let services = ExecutionServices::new().expect("execution services should be created");
 
     let blocking = services
         .submit_tokio_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
@@ -182,8 +176,7 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
 
 #[tokio::test]
 async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
-    let services =
-        ExecutionServices::new().expect("execution services should be created");
+    let services = ExecutionServices::new().expect("execution services should be created");
     let (sender, receiver) = mpsc::channel();
 
     assert!(services.is_running());
@@ -199,9 +192,7 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
         })
         .expect("tokio blocking domain should accept runnable");
     let callable = services
-        .submit_tracked_tokio_blocking_callable(|| {
-            Ok::<usize, io::Error>(40 + 2)
-        })
+        .submit_tracked_tokio_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
         .expect("tokio blocking domain should accept tracked callable");
 
     assert_eq!(
@@ -268,8 +259,7 @@ async fn test_execution_services_stop_aggregates_reports() {
 
 #[tokio::test]
 async fn test_execution_services_shutdown_rejects_new_tasks() {
-    let services =
-        ExecutionServices::new().expect("execution services should be created");
+    let services = ExecutionServices::new().expect("execution services should be created");
 
     services.shutdown();
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
