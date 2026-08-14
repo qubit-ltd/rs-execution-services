@@ -9,7 +9,8 @@
 
 use thiserror::Error;
 
-use super::{ExecutorServiceBuilderError, RayonExecutorServiceBuildError};
+use super::ExecutorServiceBuilderError;
+use super::RayonExecutorServiceBuildError;
 
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the
 /// facade.
