@@ -7,13 +7,18 @@
 // =============================================================================
 //! Builder for the execution-services facade.
 
-use std::{thread, time::Duration};
+use std::fmt;
+use std::thread;
+use std::time::Duration;
 
-use super::{
-    BlockingExecutorService, BlockingExecutorServiceBuilder, ExecutionServices,
-    ExecutionServicesBuildError, RayonExecutorService, RayonExecutorServiceBuilder,
-    TokioBlockingExecutorService, TokioIoExecutorService,
-};
+use super::BlockingExecutorService;
+use super::BlockingExecutorServiceBuilder;
+use super::ExecutionServices;
+use super::ExecutionServicesBuildError;
+use super::RayonExecutorService;
+use super::RayonExecutorServiceBuilder;
+use super::TokioBlockingExecutorService;
+use super::TokioIoExecutorService;
 
 /// Builder for [`ExecutionServices`].
 ///
@@ -21,12 +26,18 @@ use super::{
 /// [`BlockingExecutorServiceBuilder`] and CPU-pool options by delegating to
 /// [`RayonExecutorServiceBuilder`]. Tokio-backed domains are created with their
 /// default constructors because they do not currently expose custom builders.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ExecutionServicesBuilder {
     /// Builder for the blocking executor domain.
     blocking: BlockingExecutorServiceBuilder,
     /// Builder for the CPU executor domain.
     cpu: RayonExecutorServiceBuilder,
+}
+
+impl fmt::Debug for ExecutionServicesBuilder {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.debug_struct("ExecutionServicesBuilder").finish()
+    }
 }
 
 impl ExecutionServicesBuilder {
@@ -70,7 +81,10 @@ impl ExecutionServicesBuilder {
     ///
     /// This builder for fluent configuration.
     #[inline]
-    pub fn blocking_maximum_pool_size(mut self, maximum_pool_size: usize) -> Self {
+    pub fn blocking_maximum_pool_size(
+        mut self,
+        maximum_pool_size: usize,
+    ) -> Self {
         self.blocking = self.blocking.maximum_pool_size(maximum_pool_size);
         self
     }
@@ -228,11 +242,12 @@ impl ExecutionServicesBuilder {
     ///
     /// Returns [`ExecutionServicesBuildError`] if either the blocking or CPU
     /// domain rejects its builder configuration.
-    pub fn build(self) -> Result<ExecutionServices, ExecutionServicesBuildError> {
-        let blocking = self
-            .blocking
-            .build()
-            .map_err(|source| ExecutionServicesBuildError::Blocking { source })?;
+    pub fn build(
+        self,
+    ) -> Result<ExecutionServices, ExecutionServicesBuildError> {
+        let blocking = self.blocking.build().map_err(|source| {
+            ExecutionServicesBuildError::Blocking { source }
+        })?;
         let cpu = self
             .cpu
             .build()
