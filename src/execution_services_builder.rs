@@ -81,10 +81,7 @@ impl ExecutionServicesBuilder {
     ///
     /// This builder for fluent configuration.
     #[inline]
-    pub fn blocking_maximum_pool_size(
-        mut self,
-        maximum_pool_size: usize,
-    ) -> Self {
+    pub fn blocking_maximum_pool_size(mut self, maximum_pool_size: usize) -> Self {
         self.blocking = self.blocking.maximum_pool_size(maximum_pool_size);
         self
     }
@@ -242,24 +239,18 @@ impl ExecutionServicesBuilder {
     ///
     /// Returns [`ExecutionServicesBuildError`] if either the blocking or CPU
     /// domain rejects its builder configuration.
-    pub fn build(
-        self,
-    ) -> Result<ExecutionServices, ExecutionServicesBuildError> {
-        let blocking = self.blocking.build().map_err(|source| {
-            ExecutionServicesBuildError::Blocking { source }
-        })?;
+    pub fn build(self) -> Result<ExecutionServices, ExecutionServicesBuildError> {
+        let blocking = self
+            .blocking
+            .build()
+            .map_err(|source| ExecutionServicesBuildError::Blocking { source })?;
         let cpu = self
             .cpu
             .build()
             .map_err(|source| ExecutionServicesBuildError::Cpu { source })?;
         let tokio_blocking = TokioBlockingExecutorService::new();
         let io = TokioIoExecutorService::new();
-        Ok(ExecutionServices::from_parts(
-            blocking,
-            cpu,
-            tokio_blocking,
-            io,
-        ))
+        Ok(ExecutionServices::from_parts(blocking, cpu, tokio_blocking, io))
     }
 }
 
@@ -285,7 +276,5 @@ impl Default for ExecutionServicesBuilder {
 ///
 /// The available CPU parallelism, or `1` if it cannot be detected.
 fn default_pool_size() -> usize {
-    thread::available_parallelism()
-        .map(usize::from)
-        .unwrap_or(1)
+    thread::available_parallelism().map(usize::from).unwrap_or(1)
 }
