@@ -1,0 +1,6 @@
+# relative git root<TAB>repository URL<TAB>default branch
+../rs-executor	https://github.com/qubit-ltd/rs-executor	main
+../rs-rayon-executor	https://github.com/qubit-ltd/rs-rayon-executor	main
+../rs-state-machine	https://github.com/qubit-ltd/rs-state-machine	main
+../rs-thread-pool	https://github.com/qubit-ltd/rs-thread-pool	main
+../rs-tokio-executor	https://github.com/qubit-ltd/rs-tokio-executor	main
