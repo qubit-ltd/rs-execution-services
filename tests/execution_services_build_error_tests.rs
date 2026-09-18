@@ -15,7 +15,12 @@ use qubit_execution_services::ExecutionServicesBuildError;
 /// Test build error variants expose the underlying builder failure.
 #[test]
 fn test_execution_services_build_error_display_and_source() {
-    let blocking_error = match ExecutionServices::builder().blocking_maximum_pool_size(0).build() {
+    let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
+    let handle = runtime.handle().clone();
+    let blocking_error = match ExecutionServices::builder(handle.clone())
+        .blocking_maximum_pool_size(0)
+        .build()
+    {
         Ok(_) => panic!("invalid blocking pool size should fail"),
         Err(error) => error,
     };
@@ -28,7 +33,7 @@ fn test_execution_services_build_error_display_and_source() {
     );
     assert!(blocking_error.source().is_some());
 
-    let cpu_error = match ExecutionServices::builder().cpu_threads(0).build() {
+    let cpu_error = match ExecutionServices::builder(handle).cpu_threads(0).build() {
         Ok(_) => panic!("invalid cpu thread count should fail"),
         Err(error) => error,
     };

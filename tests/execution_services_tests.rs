@@ -25,7 +25,8 @@ fn create_runtime() -> tokio::runtime::Runtime {
 
 #[test]
 fn test_execution_services_submit_blocking_and_cpu_tasks() {
-    let services = ExecutionServices::builder()
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -88,7 +89,8 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
 
 #[test]
 fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
-    let services = ExecutionServices::builder()
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -142,7 +144,8 @@ fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
 
 #[test]
 fn test_execution_services_reports_shutdown_while_task_is_running() {
-    let services = ExecutionServices::builder()
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -173,7 +176,8 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
 
 #[tokio::test]
 async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
-    let services = ExecutionServices::new().expect("execution services should be created");
+    let services =
+        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
 
     let blocking = services
         .submit_tokio_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
@@ -195,7 +199,8 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
 
 #[tokio::test]
 async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
-    let services = ExecutionServices::new().expect("execution services should be created");
+    let services =
+        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
     let (sender, receiver) = mpsc::channel();
 
     assert!(services.is_running());
@@ -234,7 +239,7 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
 
 #[tokio::test]
 async fn test_execution_services_stop_aggregates_reports() {
-    let services = ExecutionServices::builder()
+    let services = ExecutionServices::builder(tokio::runtime::Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -273,7 +278,8 @@ async fn test_execution_services_stop_aggregates_reports() {
 
 #[tokio::test]
 async fn test_execution_services_shutdown_rejects_new_tasks() {
-    let services = ExecutionServices::new().expect("execution services should be created");
+    let services =
+        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
 
     services.shutdown();
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
