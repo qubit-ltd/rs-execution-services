@@ -28,6 +28,7 @@ use super::TokioIoExecutorService;
 /// default constructors because they do not currently expose custom builders.
 #[derive(Clone)]
 pub struct ExecutionServicesBuilder {
+    runtime: tokio::runtime::Handle,
     /// Builder for the blocking executor domain.
     blocking: BlockingExecutorServiceBuilder,
     /// Builder for the CPU executor domain.
@@ -41,6 +42,19 @@ impl fmt::Debug for ExecutionServicesBuilder {
 }
 
 impl ExecutionServicesBuilder {
+    /// Creates a builder with default blocking and CPU settings.
+    ///
+    /// The supplied Tokio runtime handle is shared by both Tokio-backed
+    /// execution domains created by [`Self::build`].
+    pub fn with_defaults(runtime: tokio::runtime::Handle) -> Self {
+        let pool_size = default_pool_size();
+        Self {
+            runtime,
+            blocking: BlockingExecutorService::builder().pool_size(pool_size),
+            cpu: RayonExecutorService::builder().num_threads(pool_size),
+        }
+    }
+
     /// Sets both the blocking core and maximum pool sizes to the same value.
     ///
     /// # Parameters
@@ -248,25 +262,9 @@ impl ExecutionServicesBuilder {
             .cpu
             .build()
             .map_err(|source| ExecutionServicesBuildError::Cpu { source })?;
-        let tokio_blocking = TokioBlockingExecutorService::new();
-        let io = TokioIoExecutorService::new();
+        let tokio_blocking = TokioBlockingExecutorService::new(self.runtime.clone());
+        let io = TokioIoExecutorService::new(self.runtime);
         Ok(ExecutionServices::from_parts(blocking, cpu, tokio_blocking, io))
-    }
-}
-
-impl Default for ExecutionServicesBuilder {
-    /// Creates a builder with CPU-parallelism defaults.
-    ///
-    /// # Returns
-    ///
-    /// A builder configured with available parallelism for both blocking and
-    /// CPU domains.
-    fn default() -> Self {
-        let pool_size = default_pool_size();
-        Self {
-            blocking: BlockingExecutorService::builder().pool_size(pool_size),
-            cpu: RayonExecutorService::builder().num_threads(pool_size),
-        }
     }
 }
 

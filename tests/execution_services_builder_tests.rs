@@ -24,7 +24,11 @@ fn create_runtime() -> tokio::runtime::Runtime {
 
 #[test]
 fn test_execution_services_builder_rejects_invalid_blocking_domain() {
-    let error = match ExecutionServices::builder().blocking_maximum_pool_size(0).build() {
+    let runtime = create_runtime();
+    let error = match ExecutionServices::builder(runtime.handle().clone())
+        .blocking_maximum_pool_size(0)
+        .build()
+    {
         Ok(_) => panic!("builder should reject invalid blocking domain"),
         Err(error) => error,
     };
@@ -34,7 +38,11 @@ fn test_execution_services_builder_rejects_invalid_blocking_domain() {
 
 #[test]
 fn test_execution_services_builder_rejects_invalid_cpu_domain() {
-    let error = match ExecutionServices::builder().cpu_threads(0).build() {
+    let runtime = create_runtime();
+    let error = match ExecutionServices::builder(runtime.handle().clone())
+        .cpu_threads(0)
+        .build()
+    {
         Ok(_) => panic!("builder should reject invalid cpu domain"),
         Err(error) => error,
     };
@@ -44,7 +52,8 @@ fn test_execution_services_builder_rejects_invalid_cpu_domain() {
 
 #[test]
 fn test_execution_services_builder_options_and_accessors() {
-    let services = ExecutionServices::builder()
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
         .blocking_core_pool_size(1)
         .blocking_maximum_pool_size(1)
         .blocking_queue_capacity(8)
