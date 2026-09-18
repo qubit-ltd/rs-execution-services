@@ -255,6 +255,8 @@ dependencies = [
 [[package]]
 name = "qubit-tokio-executor"
 version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8c4e299f282186e0e53080d4bd39126326f0cc47f3f6f57a54ac924d4cf53d8d"
 dependencies = [
  "parking_lot",
  "qubit-atomic",
