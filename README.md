@@ -62,8 +62,7 @@ intended for async futures and non-blocking IO work executed through
 `ExecutionServicesBuilder` receives one `tokio::runtime::Handle` and passes it
 to both Tokio-backed domains. It delegates blocking-domain settings to
 `ThreadPoolBuilder` and CPU-domain settings to `RayonExecutorServiceBuilder`.
-Tokio-backed domains currently use their default constructors because Tokio owns
-the runtime and scheduler configuration.
+Tokio's runtime and scheduler configuration remain owned by the application.
 
 The builder exposes common blocking-pool controls such as pool size, core size,
 maximum size, queue capacity, thread-name prefix, stack size, keep-alive,
