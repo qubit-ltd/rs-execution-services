@@ -50,7 +50,8 @@ intended for async futures and non-blocking IO work executed through
 
 ## Builder Configuration
 
-`ExecutionServicesBuilder` delegates blocking-domain settings to
+`ExecutionServicesBuilder` receives one `tokio::runtime::Handle` and passes it
+to both Tokio-backed domains. It delegates blocking-domain settings to
 `ThreadPoolBuilder` and CPU-domain settings to `RayonExecutorServiceBuilder`.
 Tokio-backed domains currently use their default constructors because Tokio owns
 the runtime and scheduler configuration.
@@ -80,7 +81,7 @@ use std::io;
 use qubit_execution_services::ExecutionServices;
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let services = ExecutionServices::builder()
+let services = ExecutionServices::builder(tokio::runtime::Handle::current())
     .blocking_pool_size(4)
     .blocking_queue_capacity(1024)
     .cpu_threads(4)
