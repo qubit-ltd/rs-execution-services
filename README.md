@@ -60,6 +60,21 @@ maximum size, queue capacity, thread-name prefix, stack size, keep-alive,
 core-thread timeout, and prestart behavior. It also exposes CPU-domain controls
 for Rayon worker count, thread-name prefix, and stack size.
 
+For an elastic blocking domain, configure a bounded queue together with a larger
+maximum size:
+
+```rust
+let services = ExecutionServices::builder()
+    .blocking_core_pool_size(4)
+    .blocking_maximum_pool_size(8)
+    .blocking_queue_capacity(128)
+    .build()?;
+```
+
+If `blocking_unbounded_queue()` is selected, tasks queue after the core size is
+reached and increasing the maximum size alone does not create extra burst
+workers. CPU-heavy work should use the Rayon domain.
+
 ## Shutdown Behavior
 
 `shutdown` requests orderly shutdown for every domain. New tasks are rejected,
