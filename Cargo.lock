@@ -233,11 +233,8 @@ name = "qubit-rayon-executor"
 version = "0.7.0"
 dependencies = [
  "parking_lot",
- "qubit-atomic",
- "qubit-dcl",
  "qubit-executor",
  "qubit-function",
- "qubit-lock",
  "rayon",
  "thiserror",
 ]

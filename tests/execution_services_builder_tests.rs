@@ -55,6 +55,7 @@ fn test_execution_services_builder_options_and_accessors() {
         .blocking_allow_core_thread_timeout(false)
         .blocking_prestart_core_threads()
         .cpu_threads(1)
+        .cpu_task_capacity(8)
         .cpu_thread_name_prefix("exec-cpu")
         .cpu_stack_size(2 * 1024 * 1024)
         .build()

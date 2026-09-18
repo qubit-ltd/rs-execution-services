@@ -50,6 +50,43 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
 }
 
 #[test]
+fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
+    let services = ExecutionServices::builder()
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .cpu_task_capacity(2)
+        .build()
+        .expect("execution services should be created");
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let running = services
+        .submit_tracked_cpu(move || {
+            started_tx.send(()).expect("cpu task should start");
+            release_rx.recv().expect("cpu task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("running CPU task should be accepted");
+    started_rx.recv().expect("cpu task should start");
+    let queued = services
+        .submit_tracked_cpu(|| Ok::<(), io::Error>(()))
+        .expect("queued CPU task should be accepted");
+    assert!(matches!(
+        services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Saturated)
+    ));
+    assert_eq!(queued.cancel(), qubit_executor::CancelResult::Cancelled);
+    queued.get().expect_err("queued task should be cancelled");
+    let replacement = services
+        .submit_cpu_callable(|| Ok::<(), io::Error>(()))
+        .expect("cancelled CPU capacity should be reusable");
+    release_tx.send(()).expect("running CPU task should be released");
+    running.get().expect("running CPU task should finish");
+    replacement.get().expect("replacement CPU task should finish");
+    services.shutdown();
+    create_runtime().block_on(services.await_termination());
+}
+
+#[test]
 fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
     let services = ExecutionServices::builder()
         .blocking_pool_size(1)
