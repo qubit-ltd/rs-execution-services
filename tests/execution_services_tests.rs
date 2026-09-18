@@ -52,7 +52,8 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
 
 #[test]
 fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
-    let services = ExecutionServices::builder()
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .cpu_task_capacity(2)
