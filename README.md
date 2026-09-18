@@ -20,6 +20,15 @@ abstraction layer. Libraries should usually depend on smaller crates such as
 `qubit-executor`, `qubit-thread-pool`, `qubit-rayon-executor`, or
 `qubit-tokio-executor` directly.
 
+## Installation
+
+Add the crate to your application's `Cargo.toml`:
+
+```toml
+[dependencies]
+qubit-execution-services = "0.8"
+```
+
 ## Features
 
 - `ExecutionServices` facade with separate blocking, CPU, Tokio blocking, and async IO domains.
@@ -67,7 +76,7 @@ For an elastic blocking domain, configure a bounded queue together with a larger
 maximum size:
 
 ```rust
-let services = ExecutionServices::builder()
+let services = ExecutionServices::builder(tokio::runtime::Handle::current())
     .blocking_core_pool_size(4)
     .blocking_maximum_pool_size(8)
     .blocking_queue_capacity(128)

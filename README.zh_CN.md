@@ -15,6 +15,15 @@ Qubit Execution Services 把应用常用的 Qubit executor 实现装配到一起
 
 本 crate 是应用层便利门面，不是基础抽象层。普通库通常应该直接依赖更小的 crate，例如 `qubit-executor`、`qubit-thread-pool`、`qubit-rayon-executor` 或 `qubit-tokio-executor`。
 
+## 安装
+
+将 crate 加入应用的 `Cargo.toml`：
+
+```toml
+[dependencies]
+qubit-execution-services = "0.8"
+```
+
 ## 功能
 
 - 提供 `ExecutionServices` 门面，包含独立的 blocking、CPU、Tokio blocking 与 async IO 域。
@@ -48,7 +57,7 @@ builder 暴露常用 blocking 线程池配置，包括 pool size、core size、m
 如果 blocking 域需要在突发负载下弹性扩展，应同时配置有界队列和更大的 maximum size：
 
 ```rust
-let services = ExecutionServices::builder()
+let services = ExecutionServices::builder(tokio::runtime::Handle::current())
     .blocking_core_pool_size(4)
     .blocking_maximum_pool_size(8)
     .blocking_queue_capacity(128)
