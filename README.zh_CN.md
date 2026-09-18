@@ -42,6 +42,18 @@ IO 域使用 `qubit-tokio-executor` 的 `TokioIoExecutorService`。它面向 asy
 
 builder 暴露常用 blocking 线程池配置，包括 pool size、core size、maximum size、queue capacity、线程名前缀、栈大小、keep-alive、core 线程超时和预启动行为。它也暴露 CPU 域的 Rayon worker 数量、线程名前缀和栈大小配置。
 
+如果 blocking 域需要在突发负载下弹性扩展，应同时配置有界队列和更大的 maximum size：
+
+```rust
+let services = ExecutionServices::builder()
+    .blocking_core_pool_size(4)
+    .blocking_maximum_pool_size(8)
+    .blocking_queue_capacity(128)
+    .build()?;
+```
+
+如果选择 `blocking_unbounded_queue()`，任务在达到 core size 后会继续排队；仅增加 maximum size 不会创建额外的突发 worker。CPU 密集型工作应使用 Rayon 域。
+
 ## 关闭行为
 
 `shutdown` 会对所有执行域请求有序关闭。新任务被拒绝，已接受任务按各底层服务的语义继续完成。
