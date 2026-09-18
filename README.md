@@ -58,7 +58,9 @@ the runtime and scheduler configuration.
 The builder exposes common blocking-pool controls such as pool size, core size,
 maximum size, queue capacity, thread-name prefix, stack size, keep-alive,
 core-thread timeout, and prestart behavior. It also exposes CPU-domain controls
-for Rayon worker count, thread-name prefix, and stack size.
+for Rayon worker count, accepted-task capacity, thread-name prefix, and stack
+size. CPU capacity is the total number of unfinished accepted tasks; a full CPU
+domain returns `SubmissionError::Saturated` immediately.
 
 ## Shutdown Behavior
 
@@ -84,6 +86,7 @@ let services = ExecutionServices::builder()
     .blocking_pool_size(4)
     .blocking_queue_capacity(1024)
     .cpu_threads(4)
+    .cpu_task_capacity(1024)
     .build()?;
 
 let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
