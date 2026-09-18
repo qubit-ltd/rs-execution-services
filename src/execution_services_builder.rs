@@ -73,6 +73,11 @@ impl ExecutionServicesBuilder {
 
     /// Sets the blocking maximum pool size.
     ///
+    /// The blocking pool grows beyond its core size only when its queue is
+    /// bounded and full. With `blocking_unbounded_queue()`, tasks continue to
+    /// queue after the core size is reached, so this setting alone does not
+    /// create burst workers.
+    ///
     /// # Parameters
     ///
     /// * `maximum_pool_size` - Maximum pool size for the blocking domain.
@@ -102,6 +107,11 @@ impl ExecutionServicesBuilder {
     }
 
     /// Configures the blocking domain to use an unbounded queue.
+    ///
+    /// Submissions continue to queue after the blocking core size is reached;
+    /// increasing `blocking_maximum_pool_size` does not change that behavior.
+    /// Use `blocking_queue_capacity` when bounded back pressure and elastic
+    /// worker growth are desired.
     ///
     /// # Returns
     ///
