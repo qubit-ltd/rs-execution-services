@@ -97,8 +97,8 @@ impl ExecutionServices {
     /// Returns [`ExecutionServicesBuildError`] if the default builder
     /// configuration is rejected.
     #[inline]
-    pub fn new() -> Result<Self, ExecutionServicesBuildError> {
-        Self::builder().build()
+    pub fn new(runtime: tokio::runtime::Handle) -> Result<Self, ExecutionServicesBuildError> {
+        Self::builder(runtime).build()
     }
 
     /// Creates a builder for configuring the execution-services facade.
@@ -107,8 +107,8 @@ impl ExecutionServices {
     ///
     /// A builder configured with CPU-parallelism defaults.
     #[inline]
-    pub fn builder() -> ExecutionServicesBuilder {
-        ExecutionServicesBuilder::default()
+    pub fn builder(runtime: tokio::runtime::Handle) -> ExecutionServicesBuilder {
+        ExecutionServicesBuilder::with_defaults(runtime)
     }
 
     /// Returns the blocking execution domain.
