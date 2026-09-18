@@ -36,7 +36,7 @@ tokio = { version = "^1.53", features = ["rt", "time"] }
 
 qubit-function = "0.18"
 qubit-executor = "0.8"
-qubit-rayon-executor = { path = "../rs-rayon-executor", version = "0.7" }
+qubit-rayon-executor = "0.7"
 qubit-tokio-executor = "0.9"
 qubit-thread-pool = { path = "../rs-thread-pool", version = "0.10" }
 
