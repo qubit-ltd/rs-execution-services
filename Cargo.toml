@@ -35,10 +35,10 @@ thiserror = "^2.0"
 tokio = { version = "^1.53", features = ["rt", "time"] }
 
 qubit-function = "0.18"
-qubit-executor = { path = "../rs-executor" }
-qubit-rayon-executor = { path = "../rs-rayon-executor" }
-qubit-tokio-executor = { path = "../rs-tokio-executor" }
-qubit-thread-pool = { path = "../rs-thread-pool" }
+qubit-executor = { path = "../rs-executor", version = "0.8" }
+qubit-rayon-executor = { path = "../rs-rayon-executor", version = "0.7" }
+qubit-tokio-executor = { path = "../rs-tokio-executor", version = "0.9" }
+qubit-thread-pool = { path = "../rs-thread-pool", version = "0.10" }
 
 [dev-dependencies]
 tokio = { version = "^1.53", features = ["macros", "rt-multi-thread", "time"] }
