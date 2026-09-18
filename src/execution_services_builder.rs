@@ -198,6 +198,13 @@ impl ExecutionServicesBuilder {
         self
     }
 
+    /// Sets the maximum number of accepted unfinished CPU tasks.
+    #[inline]
+    pub fn cpu_task_capacity(mut self, capacity: usize) -> Self {
+        self.cpu = self.cpu.task_capacity(capacity);
+        self
+    }
+
     /// Sets the Rayon worker-thread name prefix in the CPU domain.
     ///
     /// # Parameters
