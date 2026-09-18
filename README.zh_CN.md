@@ -38,7 +38,10 @@ IO 域使用 `qubit-tokio-executor` 的 `TokioIoExecutorService`。它面向 asy
 
 ## Builder 配置
 
-`ExecutionServicesBuilder` 将 blocking 域设置委托给 `ThreadPoolBuilder`，将 CPU 域设置委托给 `RayonExecutorServiceBuilder`。Tokio-backed 域目前使用默认构造方式，因为 Tokio runtime 和 scheduler 配置由 Tokio 自身及应用持有。
+`ExecutionServicesBuilder` 接收一个 `tokio::runtime::Handle` 并将其传给两个
+Tokio-backed 域；blocking 域设置委托给 `ThreadPoolBuilder`，CPU 域设置委托给
+`RayonExecutorServiceBuilder`。Tokio blocking 池的线程和队列仍由 Tokio runtime
+配置控制。
 
 builder 暴露常用 blocking 线程池配置，包括 pool size、core size、maximum size、queue capacity、线程名前缀、栈大小、keep-alive、core 线程超时和预启动行为。它也暴露 CPU 域的 Rayon worker 数量、已接受任务容量、线程名前缀和栈大小配置。CPU 容量统计所有尚未结束的已接受任务，容量满时立即返回 `SubmissionError::Saturated`。
 
@@ -70,7 +73,7 @@ use std::io;
 use qubit_execution_services::ExecutionServices;
 
 # async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let services = ExecutionServices::builder()
+let services = ExecutionServices::builder(tokio::runtime::Handle::current())
     .blocking_pool_size(4)
     .blocking_queue_capacity(1024)
     .cpu_threads(4)
