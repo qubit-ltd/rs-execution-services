@@ -62,6 +62,21 @@ for Rayon worker count, accepted-task capacity, thread-name prefix, and stack
 size. CPU capacity is the total number of unfinished accepted tasks; a full CPU
 domain returns `SubmissionError::Saturated` immediately.
 
+For an elastic blocking domain, configure a bounded queue together with a larger
+maximum size:
+
+```rust
+let services = ExecutionServices::builder()
+    .blocking_core_pool_size(4)
+    .blocking_maximum_pool_size(8)
+    .blocking_queue_capacity(128)
+    .build()?;
+```
+
+If `blocking_unbounded_queue()` is selected, tasks queue after the core size is
+reached and increasing the maximum size alone does not create extra burst
+workers. CPU-heavy work should use the Rayon domain.
+
 ## Shutdown Behavior
 
 `shutdown` requests orderly shutdown for every domain. New tasks are rejected,
