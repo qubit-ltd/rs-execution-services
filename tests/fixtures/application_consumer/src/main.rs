@@ -41,7 +41,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert!(services
             .spawn_io(async { Ok::<(), io::Error>(()) })
             .is_err());
-        services.await_termination().await?;
+        services.await_termination().await;
         assert!(services.is_terminated());
         Ok::<(), Box<dyn std::error::Error>>(())
     })

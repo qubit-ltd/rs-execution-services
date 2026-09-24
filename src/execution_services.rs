@@ -8,7 +8,6 @@
 mod internal;
 
 use std::future::Future;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use qubit_executor::TaskHandle;
@@ -27,13 +26,11 @@ use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 use qubit_tokio_executor::TokioTaskHandle;
 use tokio::runtime::Handle;
-use tokio::task::spawn_blocking;
 
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
-use super::ExecutionServicesWaitError;
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;
@@ -68,7 +65,7 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 ///     .cpu_threads(1)
 ///     .build()?;
 /// services.shutdown();
-/// # runtime.block_on(services.await_termination())?;
+/// # runtime.block_on(services.await_termination());
 /// # Ok(())
 /// # }
 /// ```
@@ -631,46 +628,19 @@ impl ExecutionServices {
     ///
     /// # Returns
     ///
-    /// A future that resolves after all execution domains have terminated.
-    ///
-    /// `Ok(())` indicates termination. The future returns an error if Tokio
-    /// cannot join either managed-domain blocking waiter.
-    /// Poll this future from an active Tokio runtime. It uses that calling
-    /// runtime's blocking pool for the managed blocking and CPU domains; the
-    /// Tokio-backed domains are awaited directly. The runtime supplied to the
-    /// builder must also remain active while its Tokio tasks are running.
-    /// Dropping this future after polling begins does not stop the execution
-    /// domains or their already spawned blocking waiters.
+    /// This future resolves after all execution domains have terminated.
+    /// It occupies no Tokio blocking threads or background wait tasks.
+    /// Dropping it cancels only this wait and leaves domain shutdown intact.
+    /// The runtime supplied to the builder must remain active while its Tokio
+    /// tasks are running.
     /// Request shutdown or stop before awaiting termination; this method only
     /// waits for the domains to finish.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionServicesWaitError`] if joining a blocking or CPU
-    /// termination waiter fails.
-    ///
-    /// # Panics
-    ///
-    /// Polling the returned future without an active Tokio runtime panics when
-    /// it tries to start the managed-domain blocking waiters.
-    #[must_use]
-    pub fn await_termination(
-        &self,
-    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionServicesWaitError>> + Send + '_>> {
-        Box::pin(async move {
-            let blocking = Arc::clone(&self.blocking);
-            let cpu = self.cpu.clone();
-            let blocking_wait = spawn_blocking(move || blocking.wait_termination());
-            let cpu_wait = spawn_blocking(move || cpu.wait_termination());
-
-            let blocking_result = blocking_wait.await;
-            let cpu_result = cpu_wait.await;
-            self.tokio_blocking.await_termination().await;
-            self.io.await_termination().await;
-
-            blocking_result.map_err(|source| ExecutionServicesWaitError::BlockingWaitJoin { source })?;
-            cpu_result.map_err(|source| ExecutionServicesWaitError::CpuWaitJoin { source })?;
-            Ok(())
-        })
+    pub async fn await_termination(&self) {
+        tokio::join!(
+            self.blocking.await_termination(),
+            self.cpu.await_termination(),
+            self.tokio_blocking.await_termination(),
+            self.io.await_termination(),
+        );
     }
 }
