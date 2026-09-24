@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(io.await?, 42);
 
         services.shutdown();
-        services.await_termination().await?;
+        services.await_termination().await;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
 
@@ -74,7 +74,7 @@ blocking 线程池的核心数和最大线程数默认都等于检测到的 CPU 
 
 facade 会将提交与 shutdown、stop 串行化。任一操作关闭准入后，所有执行域都拒绝新的 facade 提交。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
-当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域的组件可以直接依赖对应的 executor crate。当前工作区中的 `rs-task` 和 `rs-event-bus` 直接使用底层 crate；尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
+当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域或其专有控制能力的组件可以直接依赖对应的 executor crate。例如 `rs-task` 需要 `PoolJobTicket` 和 `ThreadPoolStats`，因此继续使用 `qubit-thread-pool`；其设计文档仅将本 facade 列为未来执行后端的候选。`rs-event-bus` 也直接使用底层 crate。尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
 
 ## 延伸阅读
 

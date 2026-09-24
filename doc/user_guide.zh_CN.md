@@ -71,7 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(io.await?, 42);
 
         services.shutdown();
-        services.await_termination().await?;
+        services.await_termination().await;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
 
@@ -86,7 +86,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 1. **创建 facade。** 调用 `ExecutionServices::builder(runtime_handle)`，按需调整由本 crate 管理的 blocking 和 CPU 线程池。`ExecutionServices::new(runtime_handle)` 使用默认 builder 配置。
 2. **按任务特点路由。** 可能等待阻塞 API 的同步工作使用 `submit_blocking*`；CPU 密集型同步工作使用 `submit_cpu*`；需要接入 Tokio 的阻塞函数使用 `submit_tokio_blocking*`；异步 future 使用 `spawn_io`。
 3. **选择结果观察方式。** `submit_*` runnable 方法只返回是否接收任务，不提供结果 handle。callable 方法返回可读取任务结果的 handle。需要查询状态或取消任务时，使用 `submit_tracked_*` 变体。
-4. **停止接收任务并等待退出。** `shutdown()` 对所有执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。请处理其 `Result`；若任一受管理执行域的 Tokio 等待任务无法 join，会返回 `ExecutionServicesWaitError`。
+4. **停止接收任务并等待退出。** `shutdown()` 对所有执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。四个域均终止后，该方法返回 `()`。
 
 提交操作本身可能失败，应在调用处处理或向上传递其 `Result`。任务被接收后仍可能以错误结束；需要确认任务结果时，应检查 handle。
 
@@ -126,11 +126,11 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 `shutdown()` 和 `stop()` 首先关闭 facade 级任务准入，并与正在进行的提交串行化，然后对各执行域请求对应操作。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
 
-应在活跃的 Tokio runtime 中 poll `await_termination()`。它使用调用方 runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。若在没有活跃 runtime 的上下文中 poll，启动 blocking waiter 时会 panic。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。开始 poll 后丢弃该 future 不会停止执行域或已经启动的 blocking waiter；服务关闭仍须显式管理。
+`await_termination()` 通过异步通知等待四个执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
 
-当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域的组件可以直接依赖对应的 executor crate。当前工作区中的 `rs-task` 和 `rs-event-bus` 直接使用底层 crate；尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
+当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域或其专有控制能力的组件可以直接依赖对应的 executor crate。`rs-task` 需要 `PoolJobTicket` 和 `ThreadPoolStats`，因此继续使用 `qubit-thread-pool`；其设计文档仅将本 facade 列为未来执行后端的候选。`rs-event-bus` 也直接使用底层 crate。尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
 
 ## 错误与诊断
 
