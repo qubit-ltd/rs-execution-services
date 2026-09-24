@@ -8,6 +8,7 @@
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use qubit_executor::TaskHandle;
 use qubit_executor::TrackedTask;
@@ -31,6 +32,40 @@ use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
 use super::ExecutionServicesWaitError;
+
+/// Serializes facade submissions against its first shutdown transition.
+struct ExecutionServicesAdmission {
+    /// Whether facade submissions are still accepted.
+    accepting: Mutex<bool>,
+}
+
+impl ExecutionServicesAdmission {
+    /// Creates an open submission gate.
+    fn new() -> Self {
+        Self {
+            accepting: Mutex::new(true),
+        }
+    }
+
+    /// Submits while holding the facade-wide admission lock.
+    fn admit<R>(&self, submit: impl FnOnce() -> Result<R, SubmissionError>) -> Result<R, SubmissionError> {
+        let accepting = self.accepting.lock().unwrap_or_else(|error| error.into_inner());
+        if !*accepting {
+            return Err(SubmissionError::Shutdown);
+        }
+        submit()
+    }
+
+    /// Closes facade admission and waits for submissions already in progress.
+    fn close(&self) {
+        *self.accepting.lock().unwrap_or_else(|error| error.into_inner()) = false;
+    }
+
+    /// Returns whether facade submissions remain accepted.
+    fn is_open(&self) -> bool {
+        *self.accepting.lock().unwrap_or_else(|error| error.into_inner())
+    }
+}
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;
@@ -70,6 +105,8 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// # }
 /// ```
 pub struct ExecutionServices {
+    /// Facade-wide gate shared by submissions and shutdown operations.
+    admission: ExecutionServicesAdmission,
     /// Managed service for synchronous tasks that may block OS threads.
     blocking: Arc<BlockingExecutorService>,
     /// Managed service for CPU-bound synchronous tasks.
@@ -134,55 +171,12 @@ impl ExecutionServices {
         io: TokioIoExecutorService,
     ) -> Self {
         Self {
+            admission: ExecutionServicesAdmission::new(),
             blocking: Arc::new(blocking),
             cpu,
             tokio_blocking,
             io,
         }
-    }
-
-    /// Returns the blocking execution domain.
-    ///
-    /// # Returns
-    ///
-    /// A shared reference to the blocking executor service.
-    #[must_use]
-    #[inline]
-    pub fn blocking(&self) -> &BlockingExecutorService {
-        self.blocking.as_ref()
-    }
-
-    /// Returns the CPU execution domain.
-    ///
-    /// # Returns
-    ///
-    /// A shared reference to the Rayon-backed CPU executor service.
-    #[must_use]
-    #[inline]
-    pub fn cpu(&self) -> &RayonExecutorService {
-        &self.cpu
-    }
-
-    /// Returns the Tokio blocking execution domain.
-    ///
-    /// # Returns
-    ///
-    /// A shared reference to the Tokio blocking executor service.
-    #[must_use]
-    #[inline]
-    pub fn tokio_blocking(&self) -> &TokioBlockingExecutorService {
-        &self.tokio_blocking
-    }
-
-    /// Returns the Tokio async IO execution domain.
-    ///
-    /// # Returns
-    ///
-    /// A shared reference to the Tokio IO executor service.
-    #[must_use]
-    #[inline]
-    pub fn io(&self) -> &TokioIoExecutorService {
-        &self.io
     }
 
     /// Submits a blocking runnable task to the blocking domain.
@@ -209,7 +203,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.blocking.submit(task)
+        self.admission.admit(|| self.blocking.submit(task))
     }
 
     /// Submits a blocking runnable task and returns a tracked handle.
@@ -236,7 +230,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.blocking.submit_tracked(task)
+        self.admission.admit(|| self.blocking.submit_tracked(task))
     }
 
     /// Submits a blocking callable task to the blocking domain.
@@ -265,7 +259,7 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.blocking.submit_callable(task)
+        self.admission.admit(|| self.blocking.submit_callable(task))
     }
 
     /// Submits a blocking callable task and returns a tracked handle.
@@ -294,7 +288,7 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.blocking.submit_tracked_callable(task)
+        self.admission.admit(|| self.blocking.submit_tracked_callable(task))
     }
 
     /// Submits a CPU-bound runnable task to the Rayon domain.
@@ -321,7 +315,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.cpu.submit(task)
+        self.admission.admit(|| self.cpu.submit(task))
     }
 
     /// Submits a CPU-bound runnable task and returns a tracked handle.
@@ -348,7 +342,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.cpu.submit_tracked(task)
+        self.admission.admit(|| self.cpu.submit_tracked(task))
     }
 
     /// Submits a CPU-bound callable task to the Rayon domain.
@@ -377,7 +371,7 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.cpu.submit_callable(task)
+        self.admission.admit(|| self.cpu.submit_callable(task))
     }
 
     /// Submits a CPU-bound callable task and returns a tracked handle.
@@ -406,7 +400,7 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.cpu.submit_tracked_callable(task)
+        self.admission.admit(|| self.cpu.submit_tracked_callable(task))
     }
 
     /// Submits a blocking runnable task to Tokio `spawn_blocking`.
@@ -434,7 +428,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.tokio_blocking.submit(task)
+        self.admission.admit(|| self.tokio_blocking.submit(task))
     }
 
     /// Submits a blocking runnable task to Tokio and returns a tracked handle.
@@ -465,7 +459,7 @@ impl ExecutionServices {
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.tokio_blocking.submit_tracked(task)
+        self.admission.admit(|| self.tokio_blocking.submit_tracked(task))
     }
 
     /// Submits a blocking callable task to Tokio `spawn_blocking`.
@@ -495,7 +489,7 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.tokio_blocking.submit_callable(task)
+        self.admission.admit(|| self.tokio_blocking.submit_callable(task))
     }
 
     /// Submits a blocking callable task to Tokio and returns a tracked handle.
@@ -528,7 +522,8 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.tokio_blocking.submit_tracked_callable(task)
+        self.admission
+            .admit(|| self.tokio_blocking.submit_tracked_callable(task))
     }
 
     /// Spawns an async IO or Future-based task on Tokio's async runtime.
@@ -557,11 +552,12 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.io.spawn(future)
+        self.admission.admit(|| self.io.spawn(future))
     }
 
     /// Requests graceful shutdown for every execution domain.
     pub fn shutdown(&self) {
+        self.admission.close();
         self.blocking.shutdown();
         self.cpu.shutdown();
         self.tokio_blocking.shutdown();
@@ -575,6 +571,7 @@ impl ExecutionServices {
     /// A per-domain aggregate report describing queued, running, and cancelled
     /// work observed during shutdown.
     pub fn stop(&self) -> ExecutionServicesStopReport {
+        self.admission.close();
         ExecutionServicesStopReport {
             blocking: self.blocking.stop(),
             cpu: self.cpu.stop(),
@@ -606,9 +603,10 @@ impl ExecutionServices {
             ExecutorServiceLifecycle::Terminated
         } else if lifecycles.contains(&ExecutorServiceLifecycle::Stopping) {
             ExecutorServiceLifecycle::Stopping
-        } else if lifecycles
-            .iter()
-            .any(|state| *state != ExecutorServiceLifecycle::Running)
+        } else if !self.admission.is_open()
+            || lifecycles
+                .iter()
+                .any(|state| *state != ExecutorServiceLifecycle::Running)
         {
             ExecutorServiceLifecycle::ShuttingDown
         } else {

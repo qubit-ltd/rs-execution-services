@@ -8,6 +8,8 @@
 //! Tests for [`ExecutionServices`](qubit_execution_services::ExecutionServices).
 
 use std::io;
+use std::sync::Arc;
+use std::sync::Barrier;
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -424,4 +426,141 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
         .await
         .expect("all execution domains should terminate");
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
+}
+
+#[tokio::test]
+async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() {
+    let services = ExecutionServices::builder(Handle::current())
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+
+    services.shutdown();
+    assert!(matches!(
+        services.submit_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.submit_cpu(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.spawn_io(async { Ok::<(), io::Error>(()) }),
+        Err(SubmissionError::Shutdown)
+    ));
+    services
+        .await_termination()
+        .await
+        .expect("execution domains should terminate");
+}
+
+#[tokio::test]
+async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutdown() {
+    let services = ExecutionServices::builder(Handle::current())
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+
+    let _stop_report = services.stop();
+    services.shutdown();
+    assert!(matches!(
+        services.submit_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.submit_cpu(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Shutdown)
+    ));
+    assert!(matches!(
+        services.spawn_io(async { Ok::<(), io::Error>(()) }),
+        Err(SubmissionError::Shutdown)
+    ));
+    services
+        .await_termination()
+        .await
+        .expect("execution domains should terminate");
+}
+
+#[test]
+fn test_execution_services_serializes_concurrent_submissions_and_shutdown() {
+    let runtime = create_runtime();
+    for _ in 0..8 {
+        let services = Arc::new(
+            ExecutionServices::builder(runtime.handle().clone())
+                .blocking_pool_size(1)
+                .cpu_threads(1)
+                .build()
+                .expect("execution services should be created"),
+        );
+        let barrier = Arc::new(Barrier::new(6));
+        let mut workers = Vec::new();
+        for submit in 0..4 {
+            let services = Arc::clone(&services);
+            let barrier = Arc::clone(&barrier);
+            workers.push(std::thread::spawn(move || {
+                barrier.wait();
+                match submit {
+                    0 => services
+                        .submit_blocking_callable(|| Ok::<(), io::Error>(()))
+                        .map(|_| ()),
+                    1 => services.submit_cpu_callable(|| Ok::<(), io::Error>(())).map(|_| ()),
+                    2 => services
+                        .submit_tokio_blocking_callable(|| Ok::<(), io::Error>(()))
+                        .map(|_| ()),
+                    _ => services.spawn_io(async { Ok::<(), io::Error>(()) }).map(|_| ()),
+                }
+            }));
+        }
+        let shutdown_services = Arc::clone(&services);
+        let shutdown_barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            shutdown_barrier.wait();
+            shutdown_services.shutdown();
+            Ok::<(), SubmissionError>(())
+        }));
+        let stop_services = Arc::clone(&services);
+        let stop_barrier = Arc::clone(&barrier);
+        workers.push(std::thread::spawn(move || {
+            stop_barrier.wait();
+            let _stop_report = stop_services.stop();
+            Ok::<(), SubmissionError>(())
+        }));
+
+        for worker in workers {
+            match worker.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(SubmissionError::Shutdown)) => {}
+                Ok(Err(error)) => panic!("unexpected concurrent submission error: {error:?}"),
+                Err(_) => panic!("concurrent submission or shutdown worker panicked"),
+            }
+        }
+
+        assert!(matches!(
+            services.submit_blocking(|| Ok::<(), io::Error>(())),
+            Err(SubmissionError::Shutdown)
+        ));
+        assert!(matches!(
+            services.submit_cpu(|| Ok::<(), io::Error>(())),
+            Err(SubmissionError::Shutdown)
+        ));
+        assert!(matches!(
+            services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+            Err(SubmissionError::Shutdown)
+        ));
+        assert!(matches!(
+            services.spawn_io(async { Ok::<(), io::Error>(()) }),
+            Err(SubmissionError::Shutdown)
+        ));
+    }
+    drop(runtime);
 }
