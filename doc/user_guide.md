@@ -92,6 +92,8 @@ Submission itself can fail, so propagate or handle its `Result` at the call site
 
 The default blocking queue holds up to 1024 waiting tasks; running tasks are outside this queue limit. A full queue rejects another blocking submission with `SubmissionError::Saturated`. Set `blocking_queue_capacity(n)` to choose another finite limit, or call `blocking_unbounded_queue()` explicitly to restore unbounded queueing. Choose a limit based on expected task sizes and submission rates; this queue limit does not cap task memory.
 
+By default, both the core and maximum blocking worker counts equal the detected CPU parallelism. Long blocking calls can occupy every worker. The pool does not grow while the bounded queue still has room, so this default limits concurrency rather than adapting to a backlog. Choose `blocking_core_pool_size`, `blocking_maximum_pool_size`, and a finite `blocking_queue_capacity` from the expected simultaneous blocking work and acceptable backlog. A full bounded queue lets the pool add workers up to the maximum; an unbounded queue keeps queueing after the core size is reached and does not trigger burst workers.
+
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 
 ```rust
@@ -123,6 +125,8 @@ The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed do
 Poll `await_termination()` from an active Tokio runtime. It uses the calling runtime's blocking pool to wait for the managed blocking and CPU domains, and asynchronously waits for both Tokio-backed domains. Polling without an active runtime panics when the blocking waiters are started. Keep the calling runtime alive with available blocking capacity, and keep the runtime supplied to the builder running until its Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the returned future after polling begins does not stop the services or already spawned blocking waiters; continue to manage service shutdown explicitly.
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
+
+Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain can depend directly on the corresponding executor crate. In this workspace, `rs-task` and `rs-event-bus` currently use lower-level crates directly; no production downstream consumer of this facade has been confirmed. The application consumer fixture verifies the public package boundary, not production adoption.
 
 ## Errors and Diagnostics
 
