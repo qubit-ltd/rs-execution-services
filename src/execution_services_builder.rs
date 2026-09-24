@@ -22,6 +22,9 @@ use super::ExecutionServices;
 use super::ExecutionServicesBuildError;
 use super::TokioBlockingExecutorService;
 
+/// Maximum number of blocking tasks waiting in the default queue.
+const DEFAULT_BLOCKING_QUEUE_CAPACITY: usize = 1024;
+
 /// Builder for [`ExecutionServices`].
 ///
 /// The builder exposes blocking-pool options by delegating to
@@ -78,12 +81,22 @@ impl ExecutionServicesBuilder {
     ///
     /// # Returns
     ///
-    /// A builder using the available CPU parallelism for both managed pools.
+    /// A builder using the available CPU parallelism for both managed pools
+    /// and a bounded blocking queue with capacity 1024.
+    ///
+    /// The blocking queue capacity limits waiting tasks. When it is full,
+    /// further blocking submissions are rejected with
+    /// [`SubmissionError::Saturated`](qubit_executor::service::SubmissionError::Saturated).
+    /// Use [`Self::blocking_queue_capacity`] to choose another finite capacity
+    /// or [`Self::blocking_unbounded_queue`] to explicitly use an unbounded
+    /// queue.
     pub fn with_defaults(runtime: Handle) -> Self {
         let pool_size = default_pool_size();
         Self {
             runtime,
-            blocking: BlockingExecutorService::builder().pool_size(pool_size),
+            blocking: BlockingExecutorService::builder()
+                .pool_size(pool_size)
+                .queue_capacity(DEFAULT_BLOCKING_QUEUE_CAPACITY),
             cpu: RayonExecutorService::builder().num_threads(pool_size),
         }
     }
