@@ -11,23 +11,23 @@ use std::sync::Arc;
 
 use qubit_executor::TaskHandle;
 use qubit_executor::TrackedTask;
+use qubit_executor::service::ExecutorService;
+use qubit_executor::service::ExecutorServiceLifecycle;
+use qubit_executor::service::SubmissionError;
 use qubit_function::Callable;
 use qubit_function::Runnable;
+use qubit_rayon_executor::RayonExecutorService;
+use qubit_rayon_executor::RayonTaskHandle;
 use qubit_thread_pool::ThreadPool;
 use qubit_thread_pool::ThreadPoolBuilder;
+use qubit_tokio_executor::TokioBlockingTaskHandle;
 use qubit_tokio_executor::TokioExecutorService;
+use qubit_tokio_executor::TokioIoExecutorService;
+use qubit_tokio_executor::TokioTaskHandle;
 
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
-use super::ExecutorService;
-use super::ExecutorServiceLifecycle;
-use super::RayonExecutorService;
-use super::RayonTaskHandle;
-use super::SubmissionError;
-use super::TokioBlockingTaskHandle;
-use super::TokioIoExecutorService;
-use super::TokioTaskHandle;
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;

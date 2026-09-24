@@ -7,7 +7,7 @@
 // =============================================================================
 //! Stop report for the execution-services facade.
 
-use super::StopReport;
+use qubit_executor::service::StopReport;
 
 /// Aggregate report returned by [`super::ExecutionServices::stop`].
 ///
