@@ -44,7 +44,7 @@ assert_eq!(cpu.get()?, 55);
 assert_eq!(io.await?, 42);
 
 services.shutdown();
-services.await_termination().await;
+services.await_termination().await?;
 # Ok(())
 # }
 ```
@@ -57,6 +57,8 @@ services.await_termination().await;
 - 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
 CPU 域可以限制已接收但尚未结束的任务数；达到上限时会立即返回 `SubmissionError::Saturated`。阻塞域使用有界队列时，可在核心线程之外扩展线程；使用无界队列时，任务会在核心线程忙碌后继续排队。配置和关闭流程详见用户手册。
+
+停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
 ## 延伸阅读
 

@@ -61,7 +61,7 @@ assert_eq!(cpu.get()?, 55);
 assert_eq!(io.await?, 42);
 
 services.shutdown();
-services.await_termination().await;
+services.await_termination().await?;
 # Ok(())
 # }
 ```
@@ -73,7 +73,7 @@ services.await_termination().await;
 1. **创建 facade。** 调用 `ExecutionServices::builder(runtime_handle)`，按需调整由本 crate 管理的 blocking 和 CPU 线程池。`ExecutionServices::new(runtime_handle)` 使用默认 builder 配置。
 2. **按任务特点路由。** 可能等待阻塞 API 的同步工作使用 `submit_blocking*`；CPU 密集型同步工作使用 `submit_cpu*`；需要接入 Tokio 的阻塞函数使用 `submit_tokio_blocking*`；异步 future 使用 `spawn_io`。
 3. **选择结果观察方式。** `submit_*` runnable 方法只返回是否接收任务，不提供结果 handle。callable 方法返回可读取任务结果的 handle。需要查询状态或取消任务时，使用 `submit_tracked_*` 变体。
-4. **停止接收任务并等待退出。** `shutdown()` 对所有执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。
+4. **停止接收任务并等待退出。** `shutdown()` 对所有执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。请处理其 `Result`；若任一受管理执行域的 Tokio 等待任务无法 join，会返回 `ExecutionServicesWaitError`。
 
 提交操作本身可能失败，应在调用处处理或向上传递其 `Result`。任务被接收后仍可能以错误结束；需要确认任务结果时，应检查 handle。
 
@@ -103,7 +103,9 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 ### 有序关闭与强制停止
 
-`shutdown()` 会拒绝新任务，并要求已接收任务按照底层服务的行为完成。`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 可分别汇总报告中的排队、运行和取消计数。这些计数是 stop 操作观察到的报告值。
+`shutdown()` 会拒绝新任务，并要求已接收任务按照底层服务的行为完成。`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
+
+`await_termination()` 使用调用方 Tokio runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
 
