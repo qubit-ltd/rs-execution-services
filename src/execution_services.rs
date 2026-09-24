@@ -24,6 +24,8 @@ use qubit_tokio_executor::TokioBlockingTaskHandle;
 use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 use qubit_tokio_executor::TokioTaskHandle;
+use tokio::runtime::Handle;
+use tokio::task::spawn_blocking;
 
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
@@ -95,7 +97,7 @@ impl ExecutionServices {
     /// Returns [`ExecutionServicesBuildError`] if the default builder
     /// configuration is rejected.
     #[inline]
-    pub fn new(runtime: tokio::runtime::Handle) -> Result<Self, ExecutionServicesBuildError> {
+    pub fn new(runtime: Handle) -> Result<Self, ExecutionServicesBuildError> {
         Self::builder(runtime).build()
     }
 
@@ -109,7 +111,7 @@ impl ExecutionServices {
     ///
     /// A builder configured with CPU-parallelism defaults.
     #[inline]
-    pub fn builder(runtime: tokio::runtime::Handle) -> ExecutionServicesBuilder {
+    pub fn builder(runtime: Handle) -> ExecutionServicesBuilder {
         ExecutionServicesBuilder::with_defaults(runtime)
     }
 
@@ -694,8 +696,8 @@ impl ExecutionServices {
         Box::pin(async move {
             let blocking = Arc::clone(&self.blocking);
             let cpu = self.cpu.clone();
-            let blocking_wait = tokio::task::spawn_blocking(move || blocking.wait_termination());
-            let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
+            let blocking_wait = spawn_blocking(move || blocking.wait_termination());
+            let cpu_wait = spawn_blocking(move || cpu.wait_termination());
 
             let blocking_result = blocking_wait.await;
             let cpu_result = cpu_wait.await;

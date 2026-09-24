@@ -6,6 +6,7 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 use thiserror::Error;
+use tokio::task::JoinError;
 
 /// Error raised when an asynchronous bridge fails while waiting for a managed
 /// execution domain to terminate.
@@ -36,7 +37,7 @@ pub enum ExecutionServicesWaitError {
     BlockingWaitJoin {
         /// Failure returned when joining the blocking-domain waiter.
         #[source]
-        source: tokio::task::JoinError,
+        source: JoinError,
     },
 
     /// The CPU executor termination waiter failed to join.
@@ -44,6 +45,6 @@ pub enum ExecutionServicesWaitError {
     CpuWaitJoin {
         /// Failure returned when joining the CPU-domain waiter.
         #[source]
-        source: tokio::task::JoinError,
+        source: JoinError,
     },
 }

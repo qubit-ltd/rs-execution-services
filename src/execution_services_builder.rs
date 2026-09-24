@@ -14,6 +14,7 @@ use std::time::Duration;
 use qubit_rayon_executor::RayonExecutorService;
 use qubit_rayon_executor::RayonExecutorServiceBuilder;
 use qubit_tokio_executor::TokioIoExecutorService;
+use tokio::runtime::Handle;
 
 use super::BlockingExecutorService;
 use super::BlockingExecutorServiceBuilder;
@@ -50,7 +51,7 @@ use super::TokioBlockingExecutorService;
 #[derive(Clone)]
 pub struct ExecutionServicesBuilder {
     /// Tokio runtime used to create the Tokio-backed execution domains.
-    runtime: tokio::runtime::Handle,
+    runtime: Handle,
     /// Builder for the blocking executor domain.
     blocking: BlockingExecutorServiceBuilder,
     /// Builder for the CPU executor domain.
@@ -78,7 +79,7 @@ impl ExecutionServicesBuilder {
     /// # Returns
     ///
     /// A builder using the available CPU parallelism for both managed pools.
-    pub fn with_defaults(runtime: tokio::runtime::Handle) -> Self {
+    pub fn with_defaults(runtime: Handle) -> Self {
         let pool_size = default_pool_size();
         Self {
             runtime,

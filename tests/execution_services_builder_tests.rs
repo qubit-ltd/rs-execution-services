@@ -14,9 +14,11 @@ use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
 use qubit_executor::service::ExecutorService;
 use qubit_executor::service::ExecutorServiceLifecycle;
+use tokio::runtime::Builder;
+use tokio::runtime::Runtime;
 
-fn create_runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
+fn create_runtime() -> Runtime {
+    Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Failed to create tokio runtime for execution services builder tests")

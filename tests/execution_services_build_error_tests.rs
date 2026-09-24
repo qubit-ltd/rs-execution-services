@@ -11,11 +11,12 @@ use std::error::Error;
 
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
+use tokio::runtime::Runtime;
 
 /// Test build error variants expose the underlying builder failure.
 #[test]
 fn test_execution_services_build_error_display_and_source() {
-    let runtime = tokio::runtime::Runtime::new().expect("runtime should build");
+    let runtime = Runtime::new().expect("runtime should build");
     let handle = runtime.handle().clone();
     let blocking_error = match ExecutionServices::builder(handle.clone())
         .blocking_maximum_pool_size(0)
