@@ -12,6 +12,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
+use qubit_executor::CancelResult;
 use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
@@ -76,7 +77,7 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
         services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
         Err(SubmissionError::Saturated)
     ));
-    assert_eq!(queued.cancel(), qubit_executor::CancelResult::Cancelled);
+    assert_eq!(queued.cancel(), CancelResult::Cancelled);
     queued.get().expect_err("queued task should be cancelled");
     let replacement = services
         .submit_cpu_callable(|| Ok::<(), io::Error>(()))
