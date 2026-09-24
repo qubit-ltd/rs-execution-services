@@ -9,6 +9,7 @@
 
 use std::io;
 use std::sync::mpsc;
+use std::thread::sleep as thread_sleep;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
@@ -16,9 +17,17 @@ use qubit_executor::CancelResult;
 use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
+use tokio::pin;
+use tokio::runtime::Builder;
+use tokio::runtime::Handle;
+use tokio::runtime::Runtime;
+use tokio::select;
+use tokio::task::yield_now;
+use tokio::test as tokio_test;
+use tokio::time::sleep;
 
-fn create_runtime() -> tokio::runtime::Runtime {
-    tokio::runtime::Builder::new_current_thread()
+fn create_runtime() -> Runtime {
+    Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Failed to create tokio runtime for execution services tests")
@@ -186,7 +195,7 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
 
 #[test]
 fn test_await_termination_completes_with_one_tokio_blocking_thread() {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Builder::new_multi_thread()
         .worker_threads(1)
         .max_blocking_threads(1)
         .enable_all()
@@ -222,11 +231,11 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
 
     runtime.block_on(async {
         let waiter = services.await_termination();
-        tokio::pin!(waiter);
-        tokio::select! {
+        pin!(waiter);
+        select! {
             result = &mut waiter => panic!("held tasks should keep termination pending: {result:?}"),
             _ = async {
-                tokio::task::yield_now().await;
+                yield_now().await;
                 blocking_release_tx.send(()).expect("blocking task release should be sent");
                 cpu_release_tx.send(()).expect("CPU task release should be sent");
             } => {}
@@ -237,10 +246,9 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
     assert!(services.is_terminated());
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
-    let services =
-        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
 
     let blocking = services
         .submit_tokio_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
@@ -260,10 +268,9 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
     assert!(services.await_termination().await.is_ok());
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
-    let services =
-        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
     let (sender, receiver) = mpsc::channel();
 
     assert!(services.is_running());
@@ -303,9 +310,9 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
     assert!(services.is_terminated());
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_stop_aggregates_reports() {
-    let services = ExecutionServices::builder(tokio::runtime::Handle::current())
+    let services = ExecutionServices::builder(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -313,18 +320,18 @@ async fn test_execution_services_stop_aggregates_reports() {
 
     let blocking = services
         .submit_tracked_tokio_blocking(|| {
-            std::thread::sleep(Duration::from_secs(1));
+            thread_sleep(Duration::from_secs(1));
             Ok::<(), io::Error>(())
         })
         .expect("tokio blocking domain should accept task");
     let io = services
         .spawn_io(async {
-            tokio::time::sleep(Duration::from_secs(1)).await;
+            sleep(Duration::from_secs(1)).await;
             Ok::<(), io::Error>(())
         })
         .expect("io domain should accept task");
 
-    tokio::task::yield_now().await;
+    yield_now().await;
     let report = services.stop();
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     assert!(services.is_stopping());
@@ -345,10 +352,9 @@ async fn test_execution_services_stop_aggregates_reports() {
     assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_shutdown_rejects_new_tasks() {
-    let services =
-        ExecutionServices::new(tokio::runtime::Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
 
     services.shutdown();
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
