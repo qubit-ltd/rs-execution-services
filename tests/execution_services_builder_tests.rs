@@ -101,9 +101,7 @@ fn test_execution_services_builder_options_and_accessors() {
         .expect("cpu runnable should complete");
 
     services.shutdown();
-    create_runtime()
-        .block_on(services.await_termination())
-        .expect("all execution domains should terminate");
+    create_runtime().block_on(services.await_termination());
 }
 
 #[test]
@@ -141,9 +139,7 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
     let report = services.stop();
     assert_eq!(report.blocking.queued, 1024);
     release_sender.send(()).expect("blocking task release should be sent");
-    runtime
-        .block_on(services.await_termination())
-        .expect("all execution domains should terminate");
+    runtime.block_on(services.await_termination());
 }
 
 #[test]
@@ -178,9 +174,7 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
     let report = services.stop();
     assert_eq!(report.blocking.queued, 1025);
     release_sender.send(()).expect("blocking task release should be sent");
-    runtime
-        .block_on(services.await_termination())
-        .expect("all execution domains should terminate");
+    runtime.block_on(services.await_termination());
 }
 
 #[tokio_test]
@@ -222,10 +216,7 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
     let report = services.stop();
     assert_eq!(report.io.cancelled, 1);
     release_sender.send(()).expect("Tokio blocking task should be released");
-    services
-        .await_termination()
-        .await
-        .expect("execution domains should terminate");
+    services.await_termination().await;
     blocking.await.expect("running Tokio blocking task should finish");
     assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
 }
@@ -284,9 +275,7 @@ fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills(
         .send(())
         .expect("additional worker should be released");
     services.shutdown();
-    runtime
-        .block_on(services.await_termination())
-        .expect("all execution domains should terminate");
+    runtime.block_on(services.await_termination());
     assert!(
         second_started,
         "the bounded queue should cause a second worker to start"
