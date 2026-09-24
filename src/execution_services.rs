@@ -47,6 +47,25 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// - `cpu`: CPU-bound synchronous tasks backed by Rayon.
 /// - `tokio_blocking`: blocking tasks routed through Tokio `spawn_blocking`.
 /// - `io`: async futures spawned on Tokio's async runtime.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionServices;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .enable_all()
+///     .build()?;
+/// let services = ExecutionServices::builder(runtime.handle().clone())
+///     .blocking_pool_size(1)
+///     .cpu_threads(1)
+///     .build()?;
+/// services.shutdown();
+/// # runtime.block_on(services.await_termination());
+/// # Ok(())
+/// # }
+/// ```
 pub struct ExecutionServices {
     /// Managed service for synchronous tasks that may block OS threads.
     blocking: Arc<BlockingExecutorService>,
@@ -87,6 +106,10 @@ impl ExecutionServices {
 
     /// Creates an execution-services facade with default builder settings.
     ///
+    /// # Parameters
+    ///
+    /// * `runtime` - Tokio runtime handle used by the blocking and IO domains.
+    ///
     /// # Returns
     ///
     /// `Ok(ExecutionServices)` if the default blocking and CPU domains build
@@ -103,6 +126,10 @@ impl ExecutionServices {
 
     /// Creates a builder for configuring the execution-services facade.
     ///
+    /// # Parameters
+    ///
+    /// * `runtime` - Tokio runtime handle used by the blocking and IO domains.
+    ///
     /// # Returns
     ///
     /// A builder configured with CPU-parallelism defaults.
@@ -116,6 +143,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A shared reference to the blocking executor service.
+    #[must_use]
     #[inline]
     pub fn blocking(&self) -> &BlockingExecutorService {
         self.blocking.as_ref()
@@ -126,6 +154,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A shared reference to the Rayon-backed CPU executor service.
+    #[must_use]
     #[inline]
     pub fn cpu(&self) -> &RayonExecutorService {
         &self.cpu
@@ -136,6 +165,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A shared reference to the Tokio blocking executor service.
+    #[must_use]
     #[inline]
     pub fn tokio_blocking(&self) -> &TokioBlockingExecutorService {
         &self.tokio_blocking
@@ -146,6 +176,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A shared reference to the Tokio IO executor service.
+    #[must_use]
     #[inline]
     pub fn io(&self) -> &TokioIoExecutorService {
         &self.io
@@ -485,6 +516,7 @@ impl ExecutionServices {
     /// terminated; [`ExecutorServiceLifecycle::Stopping`] if any domain is
     /// stopping; [`ExecutorServiceLifecycle::ShuttingDown`] if any domain is no
     /// longer running; otherwise [`ExecutorServiceLifecycle::Running`].
+    #[must_use]
     pub fn lifecycle(&self) -> ExecutorServiceLifecycle {
         let lifecycles = [
             self.blocking.lifecycle(),
@@ -514,6 +546,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// `true` only if all execution domains are running.
+    #[must_use]
     #[inline]
     pub fn is_running(&self) -> bool {
         self.lifecycle() == ExecutorServiceLifecycle::Running
@@ -525,6 +558,7 @@ impl ExecutionServices {
     ///
     /// `true` when the aggregate lifecycle is
     /// [`ExecutorServiceLifecycle::ShuttingDown`].
+    #[must_use]
     #[inline]
     pub fn is_shutting_down(&self) -> bool {
         self.lifecycle() == ExecutorServiceLifecycle::ShuttingDown
@@ -536,6 +570,7 @@ impl ExecutionServices {
     ///
     /// `true` when the aggregate lifecycle is
     /// [`ExecutorServiceLifecycle::Stopping`].
+    #[must_use]
     #[inline]
     pub fn is_stopping(&self) -> bool {
         self.lifecycle() == ExecutorServiceLifecycle::Stopping
@@ -547,6 +582,7 @@ impl ExecutionServices {
     ///
     /// `true` after any execution domain starts shutdown, stop, or has already
     /// terminated.
+    #[must_use]
     #[inline]
     pub fn is_not_running(&self) -> bool {
         self.lifecycle() != ExecutorServiceLifecycle::Running
@@ -557,6 +593,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// `true` only after all execution domains have terminated.
+    #[must_use]
     #[inline]
     pub fn is_terminated(&self) -> bool {
         self.lifecycle() == ExecutorServiceLifecycle::Terminated

@@ -26,8 +26,28 @@ use super::TokioIoExecutorService;
 /// [`BlockingExecutorServiceBuilder`] and CPU-pool options by delegating to
 /// [`RayonExecutorServiceBuilder`]. Tokio-backed domains are created with their
 /// default constructors because they do not currently expose custom builders.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionServices;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .enable_all()
+///     .build()?;
+/// let services = ExecutionServices::builder(runtime.handle().clone())
+///     .blocking_pool_size(1)
+///     .cpu_threads(1)
+///     .build()?;
+/// services.shutdown();
+/// # runtime.block_on(services.await_termination());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone)]
 pub struct ExecutionServicesBuilder {
+    /// Tokio runtime used to create the Tokio-backed execution domains.
     runtime: tokio::runtime::Handle,
     /// Builder for the blocking executor domain.
     blocking: BlockingExecutorServiceBuilder,
@@ -36,6 +56,7 @@ pub struct ExecutionServicesBuilder {
 }
 
 impl fmt::Debug for ExecutionServicesBuilder {
+    /// Formats the builder without exposing its runtime handle or pool settings.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("ExecutionServicesBuilder").finish()
     }
@@ -46,6 +67,14 @@ impl ExecutionServicesBuilder {
     ///
     /// The supplied Tokio runtime handle is shared by both Tokio-backed
     /// execution domains created by [`Self::build`].
+    ///
+    /// # Returns
+    ///
+    /// A builder using the available CPU parallelism for both managed pools.
+    ///
+    /// # Parameters
+    ///
+    /// * `runtime` - Tokio runtime used by the blocking and async IO domains.
     pub fn with_defaults(runtime: tokio::runtime::Handle) -> Self {
         let pool_size = default_pool_size();
         Self {
@@ -223,6 +252,14 @@ impl ExecutionServicesBuilder {
     }
 
     /// Sets the maximum number of accepted unfinished CPU tasks.
+    ///
+    /// # Parameters
+    ///
+    /// * `capacity` - Maximum accepted CPU tasks that have not completed.
+    ///
+    /// # Returns
+    ///
+    /// This builder for fluent configuration.
     #[inline]
     pub fn cpu_task_capacity(mut self, capacity: usize) -> Self {
         self.cpu = self.cpu.task_capacity(capacity);

@@ -10,6 +10,21 @@
 use super::StopReport;
 
 /// Aggregate report returned by [`super::ExecutionServices::stop`].
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionServicesStopReport;
+/// use qubit_executor::service::StopReport;
+///
+/// let report = ExecutionServicesStopReport {
+///     blocking: StopReport::new(1, 0, 0),
+///     cpu: StopReport::new(0, 0, 0),
+///     tokio_blocking: StopReport::new(0, 0, 0),
+///     io: StopReport::new(0, 0, 0),
+/// };
+/// assert_eq!(report.total_queued(), 1);
+/// ```
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionServicesStopReport {
     /// Stop report for the blocking executor domain.
@@ -28,6 +43,7 @@ impl ExecutionServicesStopReport {
     /// # Returns
     ///
     /// The sum of every domain's queued-task count.
+    #[must_use]
     #[inline]
     pub const fn total_queued(&self) -> usize {
         self.blocking.queued + self.cpu.queued + self.tokio_blocking.queued + self.io.queued
@@ -38,6 +54,7 @@ impl ExecutionServicesStopReport {
     /// # Returns
     ///
     /// The sum of every domain's running-task count.
+    #[must_use]
     #[inline]
     pub const fn total_running(&self) -> usize {
         self.blocking.running + self.cpu.running + self.tokio_blocking.running + self.io.running
@@ -48,6 +65,7 @@ impl ExecutionServicesStopReport {
     /// # Returns
     ///
     /// The sum of every domain's cancelled-task count.
+    #[must_use]
     #[inline]
     pub const fn total_cancelled(&self) -> usize {
         self.blocking.cancelled + self.cpu.cancelled + self.tokio_blocking.cancelled + self.io.cancelled

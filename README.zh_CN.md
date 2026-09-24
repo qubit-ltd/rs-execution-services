@@ -5,76 +5,22 @@
 [![Crates.io](https://img.shields.io/crates/v/qubit-execution-services.svg?color=blue)](https://crates.io/crates/qubit-execution-services)
 [![Rust](https://img.shields.io/badge/rust-1.94+-blue.svg?logo=rust)](https://www.rust-lang.org)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
-[![English Documentation](https://img.shields.io/badge/docs-English-blue.svg)](README.md)
+[![English Document](https://img.shields.io/badge/Document-English-blue.svg)](README.md)
 
-面向 Rust 应用的 execution-service 聚合门面。
-
-## 概览
-
-Qubit Execution Services 把应用常用的 Qubit executor 实现装配到一起：blocking OS 线程工作、CPU 密集型 Rayon 工作、Tokio blocking 工作和 async IO future。
-
-本 crate 是应用层便利门面，不是基础抽象层。普通库通常应该直接依赖更小的 crate，例如 `qubit-executor`、`qubit-thread-pool`、`qubit-rayon-executor` 或 `qubit-tokio-executor`。
+Qubit Execution Services 为 Rust 应用提供统一的任务分发入口：同步阻塞工作、CPU 密集型计算、Tokio 阻塞任务和异步 future 都可以交给各自适合的执行域。它让应用不必自行装配、持有和逐个关闭这些服务；只依赖一种执行能力的库仍可直接选用更小的 executor crate。
 
 ## 安装
 
-将 crate 加入应用的 `Cargo.toml`：
+在应用的 `Cargo.toml` 中添加依赖：
 
 ```toml
 [dependencies]
 qubit-execution-services = "0.8"
 ```
 
-## 功能
-
-- 提供 `ExecutionServices` 门面，包含独立的 blocking、CPU、Tokio blocking 与 async IO 域。
-- 提供 `ExecutionServicesBuilder`，用于配置 blocking 线程池域与 CPU Rayon 域。
-- 提供 `submit_blocking`、`submit_cpu` 与 `submit_tokio_blocking`，用于 fire-and-forget runnable 工作。
-- 提供 `submit_blocking_callable`、`submit_cpu_callable` 与 `submit_tokio_blocking_callable`，用于带返回值的 callable 工作。
-- 提供 `submit_tracked_*` 变体，用于需要状态或取消 handle 的工作。
-- 提供 `spawn_io`，用于路由到 Tokio async scheduler 的 async future。
-- 提供 `ExecutionServicesStopReport`，聚合所有执行域的 queued、running 与 cancelled 计数。
-- 提供底层 executor service 与 task handle 的类型别名和 re-export。
-
-## 执行域
-
-Blocking 域使用 `qubit-thread-pool` 的 `ThreadPool`。它面向可能阻塞 OS 线程的同步工作，例如文件系统操作或遗留 blocking API。
-
-CPU 域使用 `qubit-rayon-executor` 的 `RayonExecutorService`。它面向 CPU 密集型工作，适用于 Rayon 调度是正确执行模型的场景。
-
-Tokio blocking 域使用 `qubit-tokio-executor` 的 `TokioExecutorService`。它面向 Tokio 应用中提交的 blocking 函数，并通过 `spawn_blocking` 执行。
-
-IO 域使用 `qubit-tokio-executor` 的 `TokioIoExecutorService`。它面向 async future 与非阻塞 IO 工作，并通过 `tokio::spawn` 执行。
-
-## Builder 配置
-
-`ExecutionServicesBuilder` 接收一个 `tokio::runtime::Handle` 并将其传给两个
-Tokio-backed 域；blocking 域设置委托给 `ThreadPoolBuilder`，CPU 域设置委托给
-`RayonExecutorServiceBuilder`。Tokio blocking 池的线程和队列仍由 Tokio runtime
-配置控制。
-
-builder 暴露常用 blocking 线程池配置，包括 pool size、core size、maximum size、queue capacity、线程名前缀、栈大小、keep-alive、core 线程超时和预启动行为。它也暴露 CPU 域的 Rayon worker 数量、已接受任务容量、线程名前缀和栈大小配置。CPU 容量统计所有尚未结束的已接受任务，容量满时立即返回 `SubmissionError::Saturated`。
-
-如果 blocking 域需要在突发负载下弹性扩展，应同时配置有界队列和更大的 maximum size：
-
-```rust
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
-    .blocking_core_pool_size(4)
-    .blocking_maximum_pool_size(8)
-    .blocking_queue_capacity(128)
-    .build()?;
-```
-
-如果选择 `blocking_unbounded_queue()`，任务在达到 core size 后会继续排队；仅增加 maximum size 不会创建额外的突发 worker。CPU 密集型工作应使用 Rayon 域。
-
-## 关闭行为
-
-`shutdown` 会对所有执行域请求有序关闭。新任务被拒绝，已接受任务按各底层服务的语义继续完成。
-
-`stop` 会对所有执行域请求强制停止，并返回 `ExecutionServicesStopReport`，其中包含每个执行域一个 `StopReport`。该报告还提供 `total_queued`、`total_running` 与 `total_cancelled` 辅助方法，用于聚合统计。
-
-`await_termination` 在所有底层服务都终止后完成。
-
 ## 快速开始
+
+下面的例子用同一个门面分别执行同步阻塞任务、CPU 计算和异步任务，取得结果后再关闭所有执行域：
 
 ```rust
 use std::io;
@@ -103,52 +49,52 @@ services.await_termination().await;
 # }
 ```
 
-## 如何选择依赖
+## 能力与边界
 
-当应用边界需要一个持有型门面，并希望按任务类型路由到不同执行域时，使用 `qubit-execution-services`。
+- 将阻塞、CPU 密集型、Tokio 阻塞和 Tokio 异步任务分配到不同执行域。
+- 通过 builder 配置阻塞线程池与 CPU Rayon 池；Tokio runtime 及其调度参数由应用管理。
+- 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
+- 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
-只需要某一层或某一种运行时时，请直接使用更小的 crate：
+CPU 域可以限制已接收但尚未结束的任务数；达到上限时会立即返回 `SubmissionError::Saturated`。阻塞域使用有界队列时，可在核心线程之外扩展线程；使用无界队列时，任务会在核心线程忙碌后继续排队。配置和关闭流程详见用户手册。
 
-- `qubit-executor` 用于 trait、task handle 与共享生命周期类型。
-- `qubit-thread-pool` 用于不绑定 runtime 的 OS 线程池。
-- `qubit-rayon-executor` 用于 CPU 密集型 Rayon 执行。
-- `qubit-tokio-executor` 用于 Tokio blocking 与 async IO 执行。
+## 延伸阅读
+
+- [English user guide](doc/user_guide.md)
+- [中文用户手册](doc/user_guide.zh_CN.md)
+- [API 文档](https://docs.rs/qubit-execution-services)
+- [English README](README.md)
 
 ## 测试
 
-快速在本地跑一遍：
-
 ```bash
+# 使用默认 feature 集运行测试
 cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+
+# 使用项目声明的全部 feature 运行测试
+cargo test --all-features
+
+# 运行项目 CI 检查
+./ci-check.sh
+
+# 检查代码覆盖率
+./coverage.sh
 ```
 
-若要与持续集成（CI）保持一致，请在仓库根目录依次执行：`./align-ci.sh` 将本地工具链与配置对齐到 CI 规则，再执行 `./ci-check.sh` 复现流水线中的检查。需要查看或生成测试覆盖率时，使用 `./coverage.sh`。
+## 许可证
 
-## 参与贡献
+Copyright (c) 2025 - 2026. Haixing Hu. All rights reserved.
 
-欢迎通过 Issue 与 Pull Request 参与本仓库。建议：
+本项目基于 Apache License 2.0 授权。完整许可证文本请参阅
+[LICENSE](LICENSE)。
 
-- 报告缺陷、讨论设计或较大能力扩展时，可先开 Issue 对齐方向再投入实现。
-- 单次 PR 尽量聚焦单一主题，便于代码审查与合并历史。
-- 提交 PR 前请先运行 `./align-ci.sh`，再运行 `./ci-check.sh`，确保本地与 CI 使用同一套规则且能通过流水线等价检查。
-- 若修改运行期行为，请补充或更新相应测试；若影响对外 API 或用户可见行为，请同步更新本文档或相关 rustdoc。
-- 如果修改路由或关闭行为，请补充测试验证所有受影响的执行域。
+## 贡献
 
-向本仓库贡献内容即表示您同意以 [Apache License, Version 2.0](LICENSE)（与本项目相同）授权您的贡献。
+欢迎贡献。请遵循 Rust API 指南，及时更新公共 API 文档与测试，并在提交
+Pull Request 前运行 `./align-ci.sh` 格式化代码，运行 `./ci-check.sh` 对齐 CI 要求。
 
-## 许可证与版权
+## 作者
 
-Copyright (c) 2026. Haixing Hu.
+**Haixing Hu** - *Qubit Co. Ltd.*
 
-本软件依据 [Apache License, Version 2.0](LICENSE) 授权；完整许可文本见仓库根目录的 `LICENSE` 文件。
-
-## 作者与维护
-
-**Haixing Hu** — Qubit Co. Ltd.
-
-| | |
-| --- | --- |
-| **源码仓库** | [github.com/qubit-ltd/rs-execution-services](https://github.com/qubit-ltd/rs-execution-services) |
-| **API 文档** | [docs.rs/qubit-execution-services](https://docs.rs/qubit-execution-services) |
-| **Crate 发布** | [crates.io/crates/qubit-execution-services](https://crates.io/crates/qubit-execution-services) |
+仓库地址：[https://github.com/qubit-ltd/rs-execution-services](https://github.com/qubit-ltd/rs-execution-services)
