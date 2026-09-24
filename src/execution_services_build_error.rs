@@ -14,6 +14,23 @@ use super::RayonExecutorServiceBuildError;
 
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the
 /// facade.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionServices;
+/// use qubit_execution_services::ExecutionServicesBuildError;
+///
+/// let runtime = tokio::runtime::Builder::new_current_thread()
+///     .enable_all()
+///     .build()
+///     .expect("runtime should build");
+/// let result = ExecutionServices::builder(runtime.handle().clone())
+///     .cpu_threads(0)
+///     .build();
+/// assert!(matches!(result, Err(ExecutionServicesBuildError::Cpu { .. })));
+/// ```
+#[must_use]
 #[derive(Debug, Error)]
 pub enum ExecutionServicesBuildError {
     /// The blocking executor-service configuration is invalid.
