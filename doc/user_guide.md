@@ -36,30 +36,43 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 For an application with a Tokio runtime, pass its handle to the builder and submit work to the appropriate domain:
 
 ```rust
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
-    .blocking_pool_size(4)
-    .blocking_queue_capacity(1024)
-    .cpu_threads(4)
-    .cpu_task_capacity(1024)
-    .build()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
-let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+    runtime.block_on(async {
+        let services = ExecutionServices::builder(runtime.handle().clone())
+            .blocking_pool_size(4)
+            .blocking_queue_capacity(1024)
+            .cpu_threads(4)
+            .cpu_task_capacity(1024)
+            .build()?;
 
-assert_eq!(blocking.get()?, 42);
-assert_eq!(cpu.get()?, 55);
-assert_eq!(io.await?, 42);
+        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-services.shutdown();
-services.await_termination().await?;
-# Ok(())
-# }
+        assert_eq!(blocking.get()?, 42);
+        assert_eq!(cpu.get()?, 55);
+        assert_eq!(io.await?, 42);
+
+        services.shutdown();
+        services.await_termination().await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
 ```
 
 Here `get()` observes the blocking and CPU callable results, while awaiting the Tokio task handles observes the Tokio blocking or async result. Each callable or future returns `Result<R, E>`; the handle reports task completion separately from whether submission was accepted.
@@ -76,6 +89,8 @@ Submission itself can fail, so propagate or handle its `Result` at the call site
 ## Advanced Configuration
 
 ### Blocking pool growth and queueing
+
+The default blocking queue holds up to 1024 waiting tasks; running tasks are outside this queue limit. A full queue rejects another blocking submission with `SubmissionError::Saturated`. Set `blocking_queue_capacity(n)` to choose another finite limit, or call `blocking_unbounded_queue()` explicitly to restore unbounded queueing. Choose a limit based on expected task sizes and submission rates; this queue limit does not cap task memory.
 
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 
@@ -101,7 +116,7 @@ The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed do
 
 `shutdown()` rejects new tasks and asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport` with one `StopReport` per domain. Its `total_queued()`, `total_running()`, and `total_cancelled()` methods add the corresponding fields from those reports. Each domain is sampled in sequence, so these totals are not an atomic snapshot across all domains. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Treat these values as per-domain stop accounting, not a global concurrency measurement.
 
-`await_termination()` uses the calling Tokio runtime's blocking pool to wait for the managed blocking and CPU domains, and asynchronously waits for both Tokio-backed domains. Keep the calling runtime alive with available blocking capacity, and keep the runtime supplied to the builder running until its Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime.
+Poll `await_termination()` from an active Tokio runtime. It uses the calling runtime's blocking pool to wait for the managed blocking and CPU domains, and asynchronously waits for both Tokio-backed domains. Polling without an active runtime panics when the blocking waiters are started. Keep the calling runtime alive with available blocking capacity, and keep the runtime supplied to the builder running until its Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the returned future after polling begins does not stop the services or already spawned blocking waiters; continue to manage service shutdown explicitly.
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
 

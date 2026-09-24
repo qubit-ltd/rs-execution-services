@@ -40,30 +40,43 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 已有 Tokio runtime 的异步应用可以把当前 runtime 的 handle 交给 builder，再按任务类型提交工作：
 
 ```rust
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
-    .blocking_pool_size(4)
-    .blocking_queue_capacity(1024)
-    .cpu_threads(4)
-    .cpu_task_capacity(1024)
-    .build()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
-let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+    runtime.block_on(async {
+        let services = ExecutionServices::builder(runtime.handle().clone())
+            .blocking_pool_size(4)
+            .blocking_queue_capacity(1024)
+            .cpu_threads(4)
+            .cpu_task_capacity(1024)
+            .build()?;
 
-assert_eq!(blocking.get()?, 42);
-assert_eq!(cpu.get()?, 55);
-assert_eq!(io.await?, 42);
+        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-services.shutdown();
-services.await_termination().await?;
-# Ok(())
-# }
+        assert_eq!(blocking.get()?, 42);
+        assert_eq!(cpu.get()?, 55);
+        assert_eq!(io.await?, 42);
+
+        services.shutdown();
+        services.await_termination().await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
 ```
 
 `get()` 用于取得 blocking 与 CPU callable 的结果；Tokio blocking 或异步任务返回的 handle 则通过 `.await` 取得结果。每个 callable 或 future 都返回 `Result<R, E>`。提交是否成功由提交方法的返回值表示，任务执行结果由 handle 表示。
@@ -80,6 +93,8 @@ services.await_termination().await?;
 ## 进阶用法
 
 ### 阻塞线程池的扩展和排队
+
+blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不计入此队列容量。队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity(n)` 选择其他有限容量，也可以显式调用 `blocking_unbounded_queue()` 使用无界队列。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。
 
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
@@ -105,7 +120,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 `shutdown()` 会拒绝新任务，并要求已接收任务按照底层服务的行为完成。`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
 
-`await_termination()` 使用调用方 Tokio runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。
+应在活跃的 Tokio runtime 中 poll `await_termination()`。它使用调用方 runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。若在没有活跃 runtime 的上下文中 poll，启动 blocking waiter 时会 panic。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。开始 poll 后丢弃该 future 不会停止执行域或已经启动的 blocking waiter；服务关闭仍须显式管理。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
 
