@@ -682,13 +682,24 @@ impl ExecutionServices {
     ///
     /// `Ok(())` indicates termination. The future returns an error if Tokio
     /// cannot join either managed-domain blocking waiter.
-    /// It uses the calling Tokio runtime's blocking pool for the managed
-    /// blocking and CPU domains. The Tokio-backed domains are awaited directly.
+    /// Poll this future from an active Tokio runtime. It uses that calling
+    /// runtime's blocking pool for the managed blocking and CPU domains; the
+    /// Tokio-backed domains are awaited directly. The runtime supplied to the
+    /// builder must also remain active while its Tokio tasks are running.
+    /// Dropping this future after polling begins does not stop the execution
+    /// domains or their already spawned blocking waiters.
+    /// Request shutdown or stop before awaiting termination; this method only
+    /// waits for the domains to finish.
     ///
     /// # Errors
     ///
     /// Returns [`ExecutionServicesWaitError`] if joining a blocking or CPU
     /// termination waiter fails.
+    ///
+    /// # Panics
+    ///
+    /// Polling the returned future without an active Tokio runtime panics when
+    /// it tries to start the managed-domain blocking waiters.
     #[must_use]
     pub fn await_termination(
         &self,

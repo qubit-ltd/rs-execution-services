@@ -16,6 +16,7 @@ Qubit Execution Services 为 Rust 应用提供统一的任务分发入口：同�
 ```toml
 [dependencies]
 qubit-execution-services = "0.8"
+tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
 ## 快速开始
@@ -23,30 +24,43 @@ qubit-execution-services = "0.8"
 下面的例子用同一个门面分别执行同步阻塞任务、CPU 计算和异步任务，取得结果后再关闭所有执行域：
 
 ```rust
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
-# async fn run() -> Result<(), Box<dyn std::error::Error>> {
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
-    .blocking_pool_size(4)
-    .blocking_queue_capacity(1024)
-    .cpu_threads(4)
-    .cpu_task_capacity(1024)
-    .build()?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
-let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+    runtime.block_on(async {
+        let services = ExecutionServices::builder(runtime.handle().clone())
+            .blocking_pool_size(4)
+            .blocking_queue_capacity(1024)
+            .cpu_threads(4)
+            .cpu_task_capacity(1024)
+            .build()?;
 
-assert_eq!(blocking.get()?, 42);
-assert_eq!(cpu.get()?, 55);
-assert_eq!(io.await?, 42);
+        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-services.shutdown();
-services.await_termination().await?;
-# Ok(())
-# }
+        assert_eq!(blocking.get()?, 42);
+        assert_eq!(cpu.get()?, 55);
+        assert_eq!(io.await?, 42);
+
+        services.shutdown();
+        services.await_termination().await?;
+        Ok::<(), Box<dyn std::error::Error>>(())
+    })?;
+
+    Ok(())
+}
 ```
 
 ## 能力与边界
@@ -56,7 +70,7 @@ services.await_termination().await?;
 - 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
 - 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
-CPU 域可以限制已接收但尚未结束的任务数；达到上限时会立即返回 `SubmissionError::Saturated`。阻塞域使用有界队列时，可在核心线程之外扩展线程；使用无界队列时，任务会在核心线程忙碌后继续排队。配置和关闭流程详见用户手册。
+blocking 队列默认最多等待 1024 个任务；队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity` 设置其他有限容量，或显式选择 `blocking_unbounded_queue`。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。有界队列可让线程池在核心线程之外扩展；无界队列会在核心线程忙碌后继续排队。CPU 域也会单独限制尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。配置和关闭流程详见用户手册。
 
 停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
