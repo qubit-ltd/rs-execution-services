@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(io.await?, 42);
 
         services.shutdown();
-        services.await_termination().await?;
+        services.await_termination().await;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
 

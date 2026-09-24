@@ -67,7 +67,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(io.await?, 42);
 
         services.shutdown();
-        services.await_termination().await?;
+        services.await_termination().await;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
 
@@ -82,7 +82,7 @@ Here `get()` observes the blocking and CPU callable results, while awaiting the 
 1. **Create the facade.** Call `ExecutionServices::builder(runtime_handle)` and configure the managed blocking and CPU pools as needed. `ExecutionServices::new(runtime_handle)` uses builder defaults.
 2. **Route work by behavior.** Use `submit_blocking*` for synchronous tasks that may wait on blocking APIs, `submit_cpu*` for CPU-heavy synchronous work, `submit_tokio_blocking*` for blocking work integrated with Tokio, and `spawn_io` for async futures.
 3. **Choose how to observe work.** `submit_*` runnable methods return after acceptance and do not return a result handle. Callable methods return a task handle for the result. `submit_tracked_*` methods return tracked tasks when status or cancellation is needed.
-4. **Stop accepting work and wait.** `shutdown()` requests graceful shutdown across all domains. Then await `await_termination()` before releasing application resources that those tasks may use. Handle its `Result`; a failed Tokio join for either managed-domain waiter is returned as `ExecutionServicesWaitError`.
+4. **Stop accepting work and wait.** `shutdown()` requests graceful shutdown across all domains. Then await `await_termination()` before releasing application resources that those tasks may use. The wait returns `()` after all domains terminate.
 
 Submission itself can fail, so propagate or handle its `Result` at the call site. Accepted work can also finish with an error; inspect the task handle result when the task outcome matters.
 
@@ -122,11 +122,11 @@ The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed do
 
 `shutdown()` and `stop()` first close facade-wide submission admission, serialized against submissions already in progress, then request the corresponding operation from each domain. `shutdown()` asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport` with one `StopReport` per domain. Its `total_queued()`, `total_running()`, and `total_cancelled()` methods add the corresponding fields from those reports. Each domain is sampled in sequence, so these totals are not an atomic snapshot across all domains. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Treat these values as per-domain stop accounting, not a global concurrency measurement.
 
-Poll `await_termination()` from an active Tokio runtime. It uses the calling runtime's blocking pool to wait for the managed blocking and CPU domains, and asynchronously waits for both Tokio-backed domains. Polling without an active runtime panics when the blocking waiters are started. Keep the calling runtime alive with available blocking capacity, and keep the runtime supplied to the builder running until its Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the returned future after polling begins does not stop the services or already spawned blocking waiters; continue to manage service shutdown explicitly.
+`await_termination()` uses asynchronous notifications for all four domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
 
-Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain can depend directly on the corresponding executor crate. In this workspace, `rs-task` and `rs-event-bus` currently use lower-level crates directly; no production downstream consumer of this facade has been confirmed. The application consumer fixture verifies the public package boundary, not production adoption.
+Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain or its specific controls can depend directly on the corresponding executor crate. `rs-task` needs `PoolJobTicket` and `ThreadPoolStats`, so it continues to use `qubit-thread-pool`; its design document names this facade only as a possible future execution backend. `rs-event-bus` also uses lower-level crates directly. No production downstream consumer of this facade has been confirmed. The application consumer fixture verifies the public package boundary, not production adoption.
 
 ## Errors and Diagnostics
 

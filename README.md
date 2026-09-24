@@ -55,7 +55,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(io.await?, 42);
 
         services.shutdown();
-        services.await_termination().await?;
+        services.await_termination().await;
         Ok::<(), Box<dyn std::error::Error>>(())
     })?;
 
@@ -74,7 +74,7 @@ The blocking pool defaults both its core and maximum thread counts to the detect
 
 The facade serializes submissions against shutdown and stop. Once either operation closes admission, every domain rejects new facade submissions. Stop counts are per-domain observations taken sequentially. In particular, the Tokio IO `running` count includes accepted futures that have not completed, whether or not they are currently being polled; `total_running()` is not a global concurrency snapshot.
 
-Use this facade when an application needs one owner to submit to and close several execution domains together. A component that needs only one domain can depend directly on its executor crate. The workspace's `rs-task` and `rs-event-bus` currently use lower-level crates directly; no production downstream consumer of this facade has been confirmed. The application consumer fixture tests the published API boundary and does not establish production adoption.
+Use this facade when an application needs one owner to submit to and close several execution domains together. A component that needs only one domain or its specific controls can depend directly on that executor crate. For example, `rs-task` needs `PoolJobTicket` and `ThreadPoolStats`, so it continues to use `qubit-thread-pool`; its design document mentions this facade only as a possible future execution backend. `rs-event-bus` also uses lower-level crates directly. No production downstream consumer of this facade has been confirmed. The application consumer fixture tests the published API boundary and does not establish production adoption.
 
 ## Learn More
 
