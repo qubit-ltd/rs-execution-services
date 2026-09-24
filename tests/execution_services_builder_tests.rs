@@ -8,12 +8,14 @@
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
 use std::io;
+use std::sync::mpsc;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
 use qubit_executor::service::ExecutorService;
 use qubit_executor::service::ExecutorServiceLifecycle;
+use qubit_executor::service::SubmissionError;
 use tokio::runtime::Builder;
 use tokio::runtime::Runtime;
 
@@ -101,6 +103,83 @@ fn test_execution_services_builder_options_and_accessors() {
 
     services.shutdown();
     create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
+}
+
+#[test]
+fn test_execution_services_builder_default_blocking_queue_is_bounded() {
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+
+    services
+        .submit_blocking(move || {
+            started_sender.send(()).expect("blocking task should start");
+            release_receiver.recv().expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("blocking task should be accepted");
+    started_receiver
+        .recv()
+        .expect("blocking task should report that it started");
+
+    for _ in 0..1024 {
+        services
+            .submit_blocking(|| Ok::<(), io::Error>(()))
+            .expect("default blocking queue should accept up to 1024 waiting tasks");
+    }
+    assert!(matches!(
+        services.submit_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Saturated)
+    ));
+
+    let report = services.stop();
+    assert_eq!(report.blocking.queued, 1024);
+    release_sender.send(()).expect("blocking task release should be sent");
+    runtime
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
+}
+
+#[test]
+fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
+        .blocking_pool_size(1)
+        .blocking_unbounded_queue()
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+
+    services
+        .submit_blocking(move || {
+            started_sender.send(()).expect("blocking task should start");
+            release_receiver.recv().expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("blocking task should be accepted");
+    started_receiver
+        .recv()
+        .expect("blocking task should report that it started");
+
+    for _ in 0..1025 {
+        services
+            .submit_blocking(|| Ok::<(), io::Error>(()))
+            .expect("explicitly unbounded queue should accept more than 1024 waiting tasks");
+    }
+
+    let report = services.stop();
+    assert_eq!(report.blocking.queued, 1025);
+    release_sender.send(()).expect("blocking task release should be sent");
+    runtime
         .block_on(services.await_termination())
         .expect("all execution domains should terminate");
 }
