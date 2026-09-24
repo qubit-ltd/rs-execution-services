@@ -15,7 +15,7 @@ Add the crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.8"
+qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -66,13 +66,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## What It Provides
 
 - Separate blocking, CPU-bound, Tokio blocking, and Tokio async execution domains.
-- A builder for the blocking thread pool and CPU Rayon pool; Tokio runtime and scheduler settings remain application-owned.
+- A builder for managed pools and finite capacities for Tokio blocking and IO work; Tokio runtime and scheduler settings remain application-owned.
 - Runnable submissions, result-bearing callable submissions, and tracked task variants.
 - Aggregate lifecycle operations, graceful shutdown, abrupt stop, and per-domain stop counts.
 
-The blocking queue defaults to 1024 waiting tasks. When it is full, new blocking submissions return `SubmissionError::Saturated`; configure `blocking_queue_capacity` for another finite limit or choose `blocking_unbounded_queue` explicitly. Choose a limit based on expected task sizes and submission rates; the queue limit does not cap task memory. A bounded blocking queue can allow the pool to grow beyond its core size, while an unbounded queue continues queueing after the core size is reached. The CPU domain separately bounds unfinished accepted tasks and also reports `SubmissionError::Saturated` at capacity. See the user guide for configuration and shutdown details.
+The blocking queue defaults to 1024 waiting tasks. When it is full, new blocking submissions return `SubmissionError::Saturated`; configure `blocking_queue_capacity` for another finite limit or choose `blocking_unbounded_queue` explicitly. Choose a limit based on expected task sizes and submission rates; the queue limit does not cap task memory. A bounded blocking queue can allow the pool to grow beyond its core size, while an unbounded queue continues queueing after the core size is reached. The CPU, Tokio blocking, and Tokio IO domains each default to a capacity of 1024 unfinished accepted tasks and report `SubmissionError::Saturated` at capacity. Configure the Tokio limits with `tokio_blocking_task_capacity` and `io_task_capacity`. Once shutdown or stop closes facade admission, `SubmissionError::Shutdown` takes precedence over saturation. See the user guide for cancellation and shutdown details.
 
-Stop counts are per-domain observations taken sequentially. In particular, the Tokio IO `running` count includes accepted futures that have not completed, whether or not they are currently being polled; `total_running()` is not a global concurrency snapshot.
+The facade serializes submissions against shutdown and stop. Once either operation closes admission, every domain rejects new facade submissions. Stop counts are per-domain observations taken sequentially. In particular, the Tokio IO `running` count includes accepted futures that have not completed, whether or not they are currently being polled; `total_running()` is not a global concurrency snapshot.
 
 ## Learn More
 

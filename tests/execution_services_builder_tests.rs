@@ -8,12 +8,12 @@
 //! Tests for [`ExecutionServicesBuilder`](qubit_execution_services::ExecutionServicesBuilder).
 
 use std::io;
+use std::num::NonZeroUsize;
 use std::sync::mpsc;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
-use qubit_executor::service::ExecutorService;
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
 use tokio::runtime::Builder;
@@ -84,10 +84,6 @@ fn test_execution_services_builder_options_and_accessors() {
         .build()
         .expect("execution services should be created with custom options");
 
-    assert!(!services.blocking().is_not_running());
-    assert!(!services.cpu().is_not_running());
-    assert!(!services.tokio_blocking().is_not_running());
-    assert!(!services.io().is_not_running());
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Running);
 
     services
@@ -182,4 +178,51 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
     runtime
         .block_on(services.await_termination())
         .expect("all execution domains should terminate");
+}
+
+#[tokio::test]
+async fn test_execution_services_builder_configures_independent_tokio_capacities() {
+    let services = ExecutionServices::builder(tokio::runtime::Handle::current())
+        .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
+        .io_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
+        .build()
+        .expect("execution services should be created");
+
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+    let blocking = services
+        .submit_tracked_tokio_blocking(move || {
+            started_sender.send(()).expect("blocking task should start");
+            release_receiver.recv().expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("Tokio blocking domain should accept one task");
+    started_receiver
+        .recv_timeout(Duration::from_secs(1))
+        .expect("Tokio blocking task should start");
+    assert!(matches!(
+        services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+        Err(SubmissionError::Saturated)
+    ));
+
+    let io = services
+        .spawn_io(async {
+            std::future::pending::<()>().await;
+            Ok::<(), io::Error>(())
+        })
+        .expect("IO domain should accept one future");
+    assert!(matches!(
+        services.spawn_io(async { Ok::<(), io::Error>(()) }),
+        Err(SubmissionError::Saturated)
+    ));
+
+    let report = services.stop();
+    assert_eq!(report.io.cancelled, 1);
+    release_sender.send(()).expect("Tokio blocking task should be released");
+    services
+        .await_termination()
+        .await
+        .expect("execution domains should terminate");
+    blocking.await.expect("running Tokio blocking task should finish");
+    assert!(matches!(io.await, Err(qubit_executor::TaskExecutionError::Cancelled)));
 }
