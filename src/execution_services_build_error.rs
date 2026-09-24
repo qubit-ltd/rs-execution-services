@@ -7,10 +7,9 @@
 // =============================================================================
 //! Build error for the execution-services facade.
 
+use qubit_executor::service::ExecutorServiceBuilderError;
+use qubit_rayon_executor::RayonExecutorServiceBuildError;
 use thiserror::Error;
-
-use super::ExecutorServiceBuilderError;
-use super::RayonExecutorServiceBuildError;
 
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the
 /// facade.

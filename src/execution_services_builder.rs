@@ -11,14 +11,15 @@ use std::fmt;
 use std::thread;
 use std::time::Duration;
 
+use qubit_rayon_executor::RayonExecutorService;
+use qubit_rayon_executor::RayonExecutorServiceBuilder;
+use qubit_tokio_executor::TokioIoExecutorService;
+
 use super::BlockingExecutorService;
 use super::BlockingExecutorServiceBuilder;
 use super::ExecutionServices;
 use super::ExecutionServicesBuildError;
-use super::RayonExecutorService;
-use super::RayonExecutorServiceBuilder;
 use super::TokioBlockingExecutorService;
-use super::TokioIoExecutorService;
 
 /// Builder for [`ExecutionServices`].
 ///
@@ -69,13 +70,13 @@ impl ExecutionServicesBuilder {
     /// The supplied Tokio runtime handle is shared by both Tokio-backed
     /// execution domains created by [`Self::build`].
     ///
-    /// # Returns
-    ///
-    /// A builder using the available CPU parallelism for both managed pools.
-    ///
     /// # Parameters
     ///
     /// * `runtime` - Tokio runtime used by the blocking and async IO domains.
+    ///
+    /// # Returns
+    ///
+    /// A builder using the available CPU parallelism for both managed pools.
     pub fn with_defaults(runtime: tokio::runtime::Handle) -> Self {
         let pool_size = default_pool_size();
         Self {
