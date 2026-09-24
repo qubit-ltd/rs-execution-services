@@ -9,7 +9,6 @@
 
 use std::io;
 use std::sync::mpsc;
-use std::thread::sleep as thread_sleep;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
@@ -24,7 +23,6 @@ use tokio::runtime::Runtime;
 use tokio::select;
 use tokio::task::yield_now;
 use tokio::test as tokio_test;
-use tokio::time::sleep;
 
 fn create_runtime() -> Runtime {
     Builder::new_current_thread()
@@ -314,40 +312,101 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
 async fn test_execution_services_stop_aggregates_reports() {
     let services = ExecutionServices::builder(Handle::current())
         .blocking_pool_size(1)
+        .blocking_queue_capacity(1)
         .cpu_threads(1)
         .build()
         .expect("execution services should be created");
+    let (blocking_started_sender, blocking_started_receiver) = mpsc::channel();
+    let (blocking_release_sender, blocking_release_receiver) = mpsc::channel();
+
+    let running = services
+        .submit_tracked_blocking(move || {
+            blocking_started_sender
+                .send(())
+                .expect("blocking task should report that it started");
+            blocking_release_receiver
+                .recv()
+                .expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("blocking domain should accept running task");
+    blocking_started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("blocking task should start before stop");
+    let queued = services
+        .submit_tracked_blocking(|| Ok::<(), io::Error>(()))
+        .expect("blocking domain should accept queued task");
+
+    let (tokio_blocking_started_sender, tokio_blocking_started_receiver) = mpsc::channel();
+    let (tokio_blocking_release_sender, tokio_blocking_release_receiver) = mpsc::channel();
 
     let blocking = services
-        .submit_tracked_tokio_blocking(|| {
-            thread_sleep(Duration::from_secs(1));
+        .submit_tracked_tokio_blocking(move || {
+            tokio_blocking_started_sender
+                .send(())
+                .expect("Tokio blocking task should report that it started");
+            tokio_blocking_release_receiver
+                .recv()
+                .expect("Tokio blocking task should be released");
             Ok::<(), io::Error>(())
         })
         .expect("tokio blocking domain should accept task");
+    tokio_blocking_started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .expect("Tokio blocking task should start before stop");
+
+    let (io_started_sender, io_started_receiver) = tokio::sync::oneshot::channel();
     let io = services
-        .spawn_io(async {
-            sleep(Duration::from_secs(1)).await;
+        .spawn_io(async move {
+            io_started_sender
+                .send(())
+                .expect("IO future should report that it was polled");
+            std::future::pending::<()>().await;
             Ok::<(), io::Error>(())
         })
         .expect("io domain should accept task");
+    io_started_receiver.await.expect("IO future should start before stop");
 
-    yield_now().await;
     let report = services.stop();
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     assert!(services.is_stopping());
+    assert_eq!(report.blocking.queued, 1);
+    assert_eq!(report.blocking.running, 1);
+    assert_eq!(report.blocking.cancelled, 1);
+    assert!(report.tokio_blocking.running >= 1);
+    assert_eq!(report.io.running, 1);
+    assert_eq!(report.io.cancelled, 1);
+
+    blocking_release_sender
+        .send(())
+        .expect("blocking task release should be sent");
+    tokio_blocking_release_sender
+        .send(())
+        .expect("Tokio blocking task release should be sent");
     services
         .await_termination()
         .await
         .expect("all execution domains should terminate");
 
-    let total_active = report.total_queued() + report.total_running();
-    assert!(total_active >= 2);
-    assert!(report.tokio_blocking.queued + report.tokio_blocking.running >= 1);
-    assert!(report.io.running >= 1);
-    assert!(report.io.cancelled >= 1);
+    assert_eq!(
+        report.total_queued(),
+        report.blocking.queued + report.cpu.queued + report.tokio_blocking.queued + report.io.queued
+    );
+    assert_eq!(
+        report.total_running(),
+        report.blocking.running + report.cpu.running + report.tokio_blocking.running + report.io.running
+    );
+    assert_eq!(
+        report.total_cancelled(),
+        report.blocking.cancelled + report.cpu.cancelled + report.tokio_blocking.cancelled + report.io.cancelled
+    );
     assert!(report.total_cancelled() >= 1);
     assert!(services.is_not_running());
     assert!(services.is_terminated());
+    running
+        .get()
+        .expect("running blocking task should finish after release");
+    assert!(matches!(queued.get(), Err(TaskExecutionError::Cancelled)));
     assert!(matches!(blocking.await, Ok(()) | Err(TaskExecutionError::Cancelled)));
     assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
 }
