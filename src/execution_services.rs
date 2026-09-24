@@ -185,6 +185,11 @@ impl ExecutionServices {
 
     /// Submits a blocking runnable task to the blocking domain.
     ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to the blocking domain.
+    /// * `E` - Error type produced by the runnable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Runnable task that may block an OS thread.
@@ -207,6 +212,11 @@ impl ExecutionServices {
 
     /// Submits a blocking runnable task and returns a tracked handle.
     ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to the blocking domain.
+    /// * `E` - Error type produced by the runnable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Runnable task that may block an OS thread.
@@ -228,6 +238,12 @@ impl ExecutionServices {
     }
 
     /// Submits a blocking callable task to the blocking domain.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to the blocking domain.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
     ///
     /// # Parameters
     ///
@@ -252,6 +268,12 @@ impl ExecutionServices {
 
     /// Submits a blocking callable task and returns a tracked handle.
     ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to the blocking domain.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Callable task that may block an OS thread.
@@ -275,6 +297,11 @@ impl ExecutionServices {
 
     /// Submits a CPU-bound runnable task to the Rayon domain.
     ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to the CPU domain.
+    /// * `E` - Error type produced by the runnable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Runnable CPU task.
@@ -297,6 +324,11 @@ impl ExecutionServices {
 
     /// Submits a CPU-bound runnable task and returns a tracked handle.
     ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to the CPU domain.
+    /// * `E` - Error type produced by the runnable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Runnable CPU task.
@@ -318,6 +350,12 @@ impl ExecutionServices {
     }
 
     /// Submits a CPU-bound callable task to the Rayon domain.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to the CPU domain.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
     ///
     /// # Parameters
     ///
@@ -342,6 +380,12 @@ impl ExecutionServices {
 
     /// Submits a CPU-bound callable task and returns a tracked handle.
     ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to the CPU domain.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Callable CPU task.
@@ -365,6 +409,11 @@ impl ExecutionServices {
 
     /// Submits a blocking runnable task to Tokio `spawn_blocking`.
     ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to Tokio's blocking pool.
+    /// * `E` - Error type produced by the runnable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Runnable task to execute on Tokio's blocking pool.
@@ -387,6 +436,11 @@ impl ExecutionServices {
     }
 
     /// Submits a blocking runnable task to Tokio and returns a tracked handle.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `T` - Runnable task type submitted to Tokio's blocking pool.
+    /// * `E` - Error type produced by the runnable task.
     ///
     /// # Parameters
     ///
@@ -414,6 +468,12 @@ impl ExecutionServices {
 
     /// Submits a blocking callable task to Tokio `spawn_blocking`.
     ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to Tokio's blocking pool.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
+    ///
     /// # Parameters
     ///
     /// * `task` - Callable task to execute on Tokio's blocking pool.
@@ -437,6 +497,12 @@ impl ExecutionServices {
     }
 
     /// Submits a blocking callable task to Tokio and returns a tracked handle.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `C` - Callable task type submitted to Tokio's blocking pool.
+    /// * `R` - Successful result type produced by the callable task.
+    /// * `E` - Error type produced by the callable task.
     ///
     /// # Parameters
     ///
@@ -464,6 +530,12 @@ impl ExecutionServices {
     }
 
     /// Spawns an async IO or Future-based task on Tokio's async runtime.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `F` - Future submitted to the Tokio async scheduler.
+    /// * `R` - Successful output type produced by the future.
+    /// * `E` - Error type produced by the future.
     ///
     /// # Parameters
     ///
