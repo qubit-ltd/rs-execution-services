@@ -45,7 +45,9 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
     assert_eq!(cpu.get().expect("cpu task should complete successfully"), 42);
     services.shutdown();
     assert!(services.is_not_running());
-    create_runtime().block_on(services.await_termination());
+    create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
     assert!(services.is_not_running());
     assert!(services.is_terminated());
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
@@ -86,7 +88,9 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
     running.get().expect("running CPU task should finish");
     replacement.get().expect("replacement CPU task should finish");
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
 }
 
 #[test]
@@ -141,7 +145,9 @@ fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
     assert_eq!(cpu_callable.get().expect("cpu tracked callable should complete"), 42,);
 
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
 }
 
 #[test]
@@ -172,7 +178,62 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
     assert!(services.is_shutting_down());
     assert!(services.is_not_running());
     release_sender.send(()).expect("blocking task release should be sent");
-    create_runtime().block_on(services.await_termination());
+    create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
+    assert!(services.is_terminated());
+}
+
+#[test]
+fn test_await_termination_completes_with_one_tokio_blocking_thread() {
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(1)
+        .max_blocking_threads(1)
+        .enable_all()
+        .build()
+        .expect("runtime should build");
+    let services = ExecutionServices::builder(runtime.handle().clone())
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+    let (blocking_started_tx, blocking_started_rx) = mpsc::channel();
+    let (blocking_release_tx, blocking_release_rx) = mpsc::channel();
+    let (cpu_started_tx, cpu_started_rx) = mpsc::channel();
+    let (cpu_release_tx, cpu_release_rx) = mpsc::channel();
+
+    services
+        .submit_blocking(move || {
+            blocking_started_tx.send(()).expect("blocking task should start");
+            blocking_release_rx.recv().expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("blocking task should be accepted");
+    services
+        .submit_cpu(move || {
+            cpu_started_tx.send(()).expect("CPU task should start");
+            cpu_release_rx.recv().expect("CPU task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("CPU task should be accepted");
+    blocking_started_rx.recv().expect("blocking task should start");
+    cpu_started_rx.recv().expect("CPU task should start");
+    services.shutdown();
+
+    runtime.block_on(async {
+        let waiter = services.await_termination();
+        tokio::pin!(waiter);
+        tokio::select! {
+            result = &mut waiter => panic!("held tasks should keep termination pending: {result:?}"),
+            _ = async {
+                tokio::task::yield_now().await;
+                blocking_release_tx.send(()).expect("blocking task release should be sent");
+                cpu_release_tx.send(()).expect("CPU task release should be sent");
+            } => {}
+        }
+        waiter.await.expect("all execution domains should terminate");
+    });
+
     assert!(services.is_terminated());
 }
 
@@ -196,7 +257,7 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
     );
     assert_eq!(io.await.expect("io task should complete successfully"), 42);
     services.shutdown();
-    services.await_termination().await;
+    assert!(services.await_termination().await.is_ok());
 }
 
 #[tokio::test]
@@ -235,7 +296,10 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
     services.shutdown();
     assert!(!services.is_running());
     assert!(services.is_not_running());
-    services.await_termination().await;
+    services
+        .await_termination()
+        .await
+        .expect("all execution domains should terminate");
     assert!(services.is_terminated());
 }
 
@@ -264,7 +328,10 @@ async fn test_execution_services_stop_aggregates_reports() {
     let report = services.stop();
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     assert!(services.is_stopping());
-    services.await_termination().await;
+    services
+        .await_termination()
+        .await
+        .expect("all execution domains should terminate");
 
     let total_active = report.total_queued() + report.total_running();
     assert!(total_active >= 2);
@@ -287,6 +354,9 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
 
     assert!(matches!(result, Err(SubmissionError::Shutdown)));
-    services.await_termination().await;
+    services
+        .await_termination()
+        .await
+        .expect("all execution domains should terminate");
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }

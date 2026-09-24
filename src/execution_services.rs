@@ -28,6 +28,7 @@ use qubit_tokio_executor::TokioTaskHandle;
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
+use super::ExecutionServicesWaitError;
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;
@@ -62,7 +63,7 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 ///     .cpu_threads(1)
 ///     .build()?;
 /// services.shutdown();
-/// # runtime.block_on(services.await_termination());
+/// # runtime.block_on(services.await_termination())?;
 /// # Ok(())
 /// # }
 /// ```
@@ -604,19 +605,34 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A future that resolves after all execution domains have terminated.
+    ///
+    /// `Ok(())` indicates termination. The future returns an error if Tokio
+    /// cannot join either managed-domain blocking waiter.
+    /// It uses the calling Tokio runtime's blocking pool for the managed
+    /// blocking and CPU domains. The Tokio-backed domains are awaited directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ExecutionServicesWaitError`] if joining a blocking or CPU
+    /// termination waiter fails.
     #[must_use]
-    pub fn await_termination(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
+    pub fn await_termination(
+        &self,
+    ) -> Pin<Box<dyn Future<Output = Result<(), ExecutionServicesWaitError>> + Send + '_>> {
         Box::pin(async move {
             let blocking = Arc::clone(&self.blocking);
             let cpu = self.cpu.clone();
-            let tokio_blocking = self.tokio_blocking.clone();
             let blocking_wait = tokio::task::spawn_blocking(move || blocking.wait_termination());
             let cpu_wait = tokio::task::spawn_blocking(move || cpu.wait_termination());
-            let tokio_blocking_wait = tokio::task::spawn_blocking(move || tokio_blocking.wait_termination());
+
+            let blocking_result = blocking_wait.await;
+            let cpu_result = cpu_wait.await;
+            self.tokio_blocking.await_termination().await;
             self.io.await_termination().await;
-            let _ = blocking_wait.await;
-            let _ = cpu_wait.await;
-            let _ = tokio_blocking_wait.await;
+
+            blocking_result.map_err(|source| ExecutionServicesWaitError::BlockingWaitJoin { source })?;
+            cpu_result.map_err(|source| ExecutionServicesWaitError::CpuWaitJoin { source })?;
+            Ok(())
         })
     }
 }
