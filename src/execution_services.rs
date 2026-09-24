@@ -78,32 +78,6 @@ pub struct ExecutionServices {
 }
 
 impl ExecutionServices {
-    /// Creates an execution-services facade from its four execution domains.
-    ///
-    /// # Parameters
-    ///
-    /// * `blocking` - Blocking executor domain.
-    /// * `cpu` - CPU-bound executor domain.
-    /// * `tokio_blocking` - Tokio blocking executor domain.
-    /// * `io` - Tokio async IO executor domain.
-    ///
-    /// # Returns
-    ///
-    /// An execution-services facade owning all supplied domains.
-    pub(crate) fn from_parts(
-        blocking: BlockingExecutorService,
-        cpu: RayonExecutorService,
-        tokio_blocking: TokioBlockingExecutorService,
-        io: TokioIoExecutorService,
-    ) -> Self {
-        Self {
-            blocking: Arc::new(blocking),
-            cpu,
-            tokio_blocking,
-            io,
-        }
-    }
-
     /// Creates an execution-services facade with default builder settings.
     ///
     /// # Parameters
@@ -136,6 +110,32 @@ impl ExecutionServices {
     #[inline]
     pub fn builder(runtime: tokio::runtime::Handle) -> ExecutionServicesBuilder {
         ExecutionServicesBuilder::with_defaults(runtime)
+    }
+
+    /// Creates an execution-services facade from its four execution domains.
+    ///
+    /// # Parameters
+    ///
+    /// * `blocking` - Blocking executor domain.
+    /// * `cpu` - CPU-bound executor domain.
+    /// * `tokio_blocking` - Tokio blocking executor domain.
+    /// * `io` - Tokio async IO executor domain.
+    ///
+    /// # Returns
+    ///
+    /// An execution-services facade owning all supplied domains.
+    pub(crate) fn from_parts(
+        blocking: BlockingExecutorService,
+        cpu: RayonExecutorService,
+        tokio_blocking: TokioBlockingExecutorService,
+        io: TokioIoExecutorService,
+    ) -> Self {
+        Self {
+            blocking: Arc::new(blocking),
+            cpu,
+            tokio_blocking,
+            io,
+        }
     }
 
     /// Returns the blocking execution domain.
