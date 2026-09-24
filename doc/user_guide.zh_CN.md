@@ -96,6 +96,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不计入此队列容量。队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity(n)` 选择其他有限容量，也可以显式调用 `blocking_unbounded_queue()` 使用无界队列。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。
 
+默认情况下，blocking 域的核心线程数和最大线程数都等于检测到的 CPU 并行度。长时间阻塞的调用可能占满所有 worker。队列尚有空间时，线程池不会扩容，因此该默认值限制并发数，不会随积压自动调整。应根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到最大线程数前增加 worker；无界队列会在核心线程数达到后继续排队，不会触发突发扩容。
+
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
 ```rust
@@ -127,6 +129,8 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 应在活跃的 Tokio runtime 中 poll `await_termination()`。它使用调用方 runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。若在没有活跃 runtime 的上下文中 poll，启动 blocking waiter 时会 panic。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。开始 poll 后丢弃该 future 不会停止执行域或已经启动的 blocking waiter；服务关闭仍须显式管理。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
+
+当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域的组件可以直接依赖对应的 executor crate。当前工作区中的 `rs-task` 和 `rs-event-bus` 直接使用底层 crate；尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
 
 ## 错误与诊断
 
