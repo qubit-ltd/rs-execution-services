@@ -56,7 +56,8 @@ pub struct ExecutionServicesBuilder {
 }
 
 impl fmt::Debug for ExecutionServicesBuilder {
-    /// Formats the builder without exposing its runtime handle or pool settings.
+    /// Formats the builder without exposing its runtime handle or pool
+    /// settings.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("ExecutionServicesBuilder").finish()
     }
