@@ -15,7 +15,7 @@ Qubit Execution Services 为 Rust 应用提供统一的任务分发入口：同�
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.8"
+qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -66,13 +66,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ## 能力与边界
 
 - 将阻塞、CPU 密集型、Tokio 阻塞和 Tokio 异步任务分配到不同执行域。
-- 通过 builder 配置阻塞线程池与 CPU Rayon 池；Tokio runtime 及其调度参数由应用管理。
+- 通过 builder 配置受管理线程池，以及 Tokio 阻塞与 IO 域的有限容量；Tokio runtime 及其调度参数由应用管理。
 - 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
 - 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
-blocking 队列默认最多等待 1024 个任务；队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity` 设置其他有限容量，或显式选择 `blocking_unbounded_queue`。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。有界队列可让线程池在核心线程之外扩展；无界队列会在核心线程忙碌后继续排队。CPU 域也会单独限制尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。配置和关闭流程详见用户手册。
+blocking 队列默认最多等待 1024 个任务；队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity` 设置其他有限容量，或显式选择 `blocking_unbounded_queue`。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。有界队列可让线程池在核心线程之外扩展；无界队列会在核心线程忙碌后继续排队。CPU、Tokio 阻塞和 Tokio IO 域分别默认限制 1024 个尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。可通过 `tokio_blocking_task_capacity` 和 `io_task_capacity` 配置 Tokio 域。shutdown 或 stop 关闭 facade 准入后，`SubmissionError::Shutdown` 优先于容量已满的错误。配置、取消和关闭流程详见用户手册。
 
-停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
+facade 会将提交与 shutdown、stop 串行化。任一操作关闭准入后，所有执行域都拒绝新的 facade 提交。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
 ## 延伸阅读
 

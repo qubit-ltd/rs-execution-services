@@ -8,6 +8,7 @@
 //! Builder for the execution-services facade.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::thread;
 use std::time::Duration;
 
@@ -25,12 +26,16 @@ use super::TokioBlockingExecutorService;
 /// Maximum number of blocking tasks waiting in the default queue.
 const DEFAULT_BLOCKING_QUEUE_CAPACITY: usize = 1024;
 
+/// Maximum unfinished-task capacity for each Tokio-backed domain by default.
+const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
+
 /// Builder for [`ExecutionServices`].
 ///
 /// The builder exposes blocking-pool options by delegating to
 /// [`BlockingExecutorServiceBuilder`] and CPU-pool options by delegating to
-/// [`RayonExecutorServiceBuilder`]. Tokio-backed domains are created with their
-/// default constructors because they do not currently expose custom builders.
+/// [`RayonExecutorServiceBuilder`]. It also configures finite accepted-task
+/// capacities for the Tokio-backed domains; Tokio runtime settings remain
+/// application-owned.
 ///
 /// # Examples
 ///
@@ -59,6 +64,10 @@ pub struct ExecutionServicesBuilder {
     blocking: BlockingExecutorServiceBuilder,
     /// Builder for the CPU executor domain.
     cpu: RayonExecutorServiceBuilder,
+    /// Maximum accepted unfinished tasks in the Tokio blocking domain.
+    tokio_blocking_task_capacity: NonZeroUsize,
+    /// Maximum accepted unfinished futures in the Tokio IO domain.
+    io_task_capacity: NonZeroUsize,
 }
 
 impl fmt::Debug for ExecutionServicesBuilder {
@@ -98,7 +107,41 @@ impl ExecutionServicesBuilder {
                 .pool_size(pool_size)
                 .queue_capacity(DEFAULT_BLOCKING_QUEUE_CAPACITY),
             cpu: RayonExecutorService::builder().num_threads(pool_size),
+            tokio_blocking_task_capacity: NonZeroUsize::new(DEFAULT_TOKIO_TASK_CAPACITY)
+                .expect("default Tokio task capacity should be nonzero"),
+            io_task_capacity: NonZeroUsize::new(DEFAULT_TOKIO_TASK_CAPACITY)
+                .expect("default Tokio task capacity should be nonzero"),
         }
+    }
+
+    /// Sets the maximum accepted unfinished tasks in the Tokio blocking domain.
+    ///
+    /// # Parameters
+    ///
+    /// * `capacity` - Nonzero limit for queued and running blocking tasks.
+    ///
+    /// # Returns
+    ///
+    /// This builder for fluent configuration.
+    #[inline]
+    pub fn tokio_blocking_task_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.tokio_blocking_task_capacity = capacity;
+        self
+    }
+
+    /// Sets the maximum accepted unfinished futures in the Tokio IO domain.
+    ///
+    /// # Parameters
+    ///
+    /// * `capacity` - Nonzero limit for async futures not yet completed.
+    ///
+    /// # Returns
+    ///
+    /// This builder for fluent configuration.
+    #[inline]
+    pub fn io_task_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.io_task_capacity = capacity;
+        self
     }
 
     /// Sets both the blocking core and maximum pool sizes to the same value.
@@ -333,8 +376,9 @@ impl ExecutionServicesBuilder {
             .cpu
             .build()
             .map_err(|source| ExecutionServicesBuildError::Cpu { source })?;
-        let tokio_blocking = TokioBlockingExecutorService::new(self.runtime.clone());
-        let io = TokioIoExecutorService::new(self.runtime);
+        let tokio_blocking =
+            TokioBlockingExecutorService::with_task_capacity(self.runtime.clone(), self.tokio_blocking_task_capacity);
+        let io = TokioIoExecutorService::with_task_capacity(self.runtime, self.io_task_capacity);
         Ok(ExecutionServices::from_parts(blocking, cpu, tokio_blocking, io))
     }
 }

@@ -2,7 +2,7 @@
 
 [English user guide](user_guide.md) | [中文 README](../README.zh_CN.md)
 
-本手册面向使用 `qubit-execution-services` 0.8.0 的 Rust 应用开发者，介绍如何按任务特点选择执行域、配置受本 crate 管理的线程池、处理提交和执行结果，并在应用退出时关闭服务。本 crate 面向应用层整合；如果库只需要一种执行能力，通常直接依赖对应的底层 crate 更合适。
+本手册面向使用 `qubit-execution-services` 0.9.0 的 Rust 应用开发者，介绍如何按任务特点选择执行域、配置受本 crate 管理的线程池、处理提交和执行结果，并在应用退出时关闭服务。本 crate 面向应用层整合；如果库只需要一种执行能力，通常直接依赖对应的底层 crate 更合适。
 
 ## 手册目标与读者
 
@@ -33,7 +33,7 @@
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.8"
+qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -112,13 +112,17 @@ let services = ExecutionServices::builder(tokio::runtime::Handle::current())
 
 `cpu_threads(n)` 配置 Rayon worker 数量。`cpu_task_capacity(n)` 限制已接收但尚未结束的 CPU 任务总数，其中包括正在运行和等待执行的任务。达到容量时，新提交会返回 `SubmissionError::Saturated`。已接收任务完成，或排队中的 tracked task 被取消后，容量可以重新释放。
 
+### Tokio 任务容量
+
+Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务。计数包括排队和运行中的工作；IO 域还包括已被 Tokio 接收但尚未 poll 的 future。达到容量时，提交返回 `SubmissionError::Saturated`。可在 facade builder 上通过 `tokio_blocking_task_capacity(NonZeroUsize)` 或 `io_task_capacity(NonZeroUsize)` 设置其他有限容量。任务完成后会释放容量。取消排队中的阻塞任务或 abort IO 任务后，底层任务被释放时会归还容量；已经开始运行的阻塞闭包无法被强制停止，会一直占用容量直到返回。
+
 ### Tokio runtime 的归属
 
-builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域。本 crate 没有为这两个域提供独立 builder；runtime 和调度器参数由创建 runtime 的应用配置。
+builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域，并配置其任务准入容量。runtime 和调度器参数由创建 runtime 的应用配置。facade 持有执行域且不暴露直接访问器，因此提交统一经过 facade 级关闭准入门。
 
 ### 有序关闭与强制停止
 
-`shutdown()` 会拒绝新任务，并要求已接收任务按照底层服务的行为完成。`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
+`shutdown()` 和 `stop()` 首先关闭 facade 级任务准入，并与正在进行的提交串行化，然后对各执行域请求对应操作。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
 
 应在活跃的 Tokio runtime 中 poll `await_termination()`。它使用调用方 runtime 的 blocking pool 等待受管理的 blocking 和 CPU 域，并以异步方式等待两个 Tokio 执行域。若在没有活跃 runtime 的上下文中 poll，启动 blocking waiter 时会 panic。等待期间应保持调用方 runtime 及其 blocking pool 可用；builder 收到的 runtime 也必须继续运行，直到其中的 Tokio 任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。开始 poll 后丢弃该 future 不会停止执行域或已经启动的 blocking waiter；服务关闭仍须显式管理。
 
@@ -127,7 +131,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 ## 错误与诊断
 
 - `ExecutionServicesBuilder::build()` 可能返回 `ExecutionServicesBuildError::Blocking` 或 `ExecutionServicesBuildError::Cpu`，分别表示 blocking 或 CPU builder 拒绝了配置。错误会保留底层 builder 错误作为来源。
-- 提交方法通过 `SubmissionError` 报告执行域拒绝任务的情况。CPU 域达到配置容量时返回 `SubmissionError::Saturated`；开始关闭后，新任务会被拒绝。
+- 提交方法通过 `SubmissionError` 报告执行域拒绝任务的情况。CPU 和 Tokio 域达到配置容量时返回 `SubmissionError::Saturated`；开始关闭后，所有 facade 提交都会返回 `SubmissionError::Shutdown`，即使执行域同时已达到容量上限。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
 - 汇总关闭情况时，先检查 `ExecutionServicesStopReport` 的各域字段，再按需要读取总数。
 
@@ -136,7 +140,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 | 现象 | 检查方法 |
 | --- | --- |
 | `build()` 返回错误 | 根据 `Blocking` 或 `Cpu` 变体检查相应线程池配置。例如，blocking 最大线程数为零或 CPU worker 数为零都会被拒绝。 |
-| CPU 提交返回 `Saturated` | 增大 `cpu_task_capacity`、减少未完成任务，或在提交前增加背压。 |
+| CPU 或 Tokio 提交返回 `Saturated` | 增大对应任务容量、减少未完成任务，或在提交前增加背压。 |
 | blocking 任务持续排队，没有增加 worker | 检查队列是否为无界队列。需要弹性扩展时，改用有界 `blocking_queue_capacity` 并设置更大的 `blocking_maximum_pool_size`。 |
 | 关闭时提交新任务失败 | 检查 `lifecycle()` 状态；开始关闭后停止提交。 |
 | `await_termination()` 一直未完成 | 检查已接收的 blocking 任务是否仍在运行或等待外部条件；有序关闭会等待底层服务终止。 |

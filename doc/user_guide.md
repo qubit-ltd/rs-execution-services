@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) | [README](../README.md)
 
-This guide is for Rust application developers using `qubit-execution-services` 0.8.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
+This guide is for Rust application developers using `qubit-execution-services` 0.9.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
 
 ## Conceptual Model
 
@@ -29,7 +29,7 @@ The crate requires Rust 1.94 or newer. Add the published crate and Tokio to the 
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.8"
+qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -108,13 +108,17 @@ With `blocking_unbounded_queue()`, work continues to queue after the core size i
 
 `cpu_threads(n)` configures Rayon worker count. `cpu_task_capacity(n)` limits the total number of accepted CPU tasks that have not finished, including running and queued work. A submission made at capacity returns `SubmissionError::Saturated`; when accepted work finishes or a queued tracked task is cancelled, capacity can become available again.
 
+### Tokio task capacities
+
+The Tokio blocking and IO domains each default to 1024 accepted tasks that have not completed. This count includes queued and running work; for IO, it also includes futures that Tokio has accepted but has not polled yet. At capacity, submission returns `SubmissionError::Saturated`. Set `tokio_blocking_task_capacity(NonZeroUsize)` or `io_task_capacity(NonZeroUsize)` on the facade builder to choose another finite limit. A completed task releases its slot. Cancelling a queued blocking task or aborting an IO task releases its slot when the underlying task is dropped; a blocking closure that has already started cannot be forcibly stopped and keeps its slot until it returns.
+
 ### Tokio runtime ownership
 
-The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed domains. This crate does not expose builders for those domains. Configure Tokio's runtime and scheduler in the application that creates the runtime.
+The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed domains and configures their accepted-task capacities. Configure Tokio's runtime and scheduler in the application that creates the runtime. The facade owns the domains and does not expose direct domain accessors, so submissions pass through the facade-wide shutdown gate.
 
 ### Graceful shutdown and abrupt stop
 
-`shutdown()` rejects new tasks and asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport` with one `StopReport` per domain. Its `total_queued()`, `total_running()`, and `total_cancelled()` methods add the corresponding fields from those reports. Each domain is sampled in sequence, so these totals are not an atomic snapshot across all domains. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Treat these values as per-domain stop accounting, not a global concurrency measurement.
+`shutdown()` and `stop()` first close facade-wide submission admission, serialized against submissions already in progress, then request the corresponding operation from each domain. `shutdown()` asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport` with one `StopReport` per domain. Its `total_queued()`, `total_running()`, and `total_cancelled()` methods add the corresponding fields from those reports. Each domain is sampled in sequence, so these totals are not an atomic snapshot across all domains. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Treat these values as per-domain stop accounting, not a global concurrency measurement.
 
 Poll `await_termination()` from an active Tokio runtime. It uses the calling runtime's blocking pool to wait for the managed blocking and CPU domains, and asynchronously waits for both Tokio-backed domains. Polling without an active runtime panics when the blocking waiters are started. Keep the calling runtime alive with available blocking capacity, and keep the runtime supplied to the builder running until its Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the returned future after polling begins does not stop the services or already spawned blocking waiters; continue to manage service shutdown explicitly.
 
@@ -123,7 +127,7 @@ The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is
 ## Errors and Diagnostics
 
 - `ExecutionServicesBuilder::build()` returns `ExecutionServicesBuildError::Blocking` when the blocking builder rejects its configuration, or `ExecutionServicesBuildError::Cpu` when the CPU builder rejects its configuration. The error retains the underlying builder error as its source.
-- Submission methods return `SubmissionError` when a domain refuses work. The CPU domain reports a full configured capacity as `SubmissionError::Saturated`. After shutdown, submissions are rejected.
+- Submission methods return `SubmissionError` when a domain refuses work. The CPU and Tokio domains report a full configured capacity as `SubmissionError::Saturated`. After shutdown starts, all facade submissions return `SubmissionError::Shutdown`, even if a domain is also at capacity.
 - Once accepted, the task's result is obtained through its handle. A task's own error value is distinct from a submission error; inspect both layers rather than treating successful submission as successful completion.
 - For aggregate shutdown diagnostics, inspect the per-domain fields of `ExecutionServicesStopReport` before relying only on totals.
 
@@ -132,7 +136,7 @@ The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is
 | Symptom | Check |
 | --- | --- |
 | `build()` returns an error | Inspect whether the error is the `Blocking` or `Cpu` variant, then validate the corresponding pool settings. For example, a zero maximum blocking size or zero CPU thread count is rejected. |
-| CPU submission returns `Saturated` | Increase `cpu_task_capacity`, reduce outstanding work, or apply backpressure before submitting more tasks. |
+| CPU or Tokio submission returns `Saturated` | Increase the relevant task capacity, reduce outstanding work, or apply backpressure before submitting more tasks. |
 | Blocking work queues instead of using more workers | Check whether the blocking queue is unbounded. Configure a bounded `blocking_queue_capacity` and a larger `blocking_maximum_pool_size` if elastic growth is desired. |
 | A new submission fails during shutdown | Check `lifecycle()` and stop submitting once shutdown begins. |
 | `await_termination()` does not resolve | Check whether accepted blocking work is still running or waiting on an external condition; graceful shutdown waits for underlying services to terminate. |
