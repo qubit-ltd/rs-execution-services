@@ -42,7 +42,7 @@ use super::TokioBlockingExecutorService;
 ///     .cpu_threads(1)
 ///     .build()?;
 /// services.shutdown();
-/// # runtime.block_on(services.await_termination());
+/// # runtime.block_on(services.await_termination())?;
 /// # Ok(())
 /// # }
 /// ```

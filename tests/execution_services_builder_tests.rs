@@ -23,6 +23,16 @@ fn create_runtime() -> tokio::runtime::Runtime {
 }
 
 #[test]
+fn test_execution_services_builder_debug_does_not_expose_configuration() {
+    let runtime = create_runtime();
+    let builder = ExecutionServices::builder(runtime.handle().clone())
+        .blocking_thread_name_prefix("private-thread-prefix")
+        .cpu_threads(1);
+
+    assert_eq!(format!("{builder:?}"), "ExecutionServicesBuilder");
+}
+
+#[test]
 fn test_execution_services_builder_rejects_invalid_blocking_domain() {
     let runtime = create_runtime();
     let error = match ExecutionServices::builder(runtime.handle().clone())
@@ -88,5 +98,7 @@ fn test_execution_services_builder_options_and_accessors() {
         .expect("cpu runnable should complete");
 
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    create_runtime()
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
 }
