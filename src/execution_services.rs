@@ -5,10 +5,11 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+mod internal;
+
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
-use std::sync::Mutex;
 
 use qubit_executor::TaskHandle;
 use qubit_executor::TrackedTask;
@@ -28,44 +29,11 @@ use qubit_tokio_executor::TokioTaskHandle;
 use tokio::runtime::Handle;
 use tokio::task::spawn_blocking;
 
+use self::internal::execution_services_admission::ExecutionServicesAdmission;
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
 use super::ExecutionServicesWaitError;
-
-/// Serializes facade submissions against its first shutdown transition.
-struct ExecutionServicesAdmission {
-    /// Whether facade submissions are still accepted.
-    accepting: Mutex<bool>,
-}
-
-impl ExecutionServicesAdmission {
-    /// Creates an open submission gate.
-    fn new() -> Self {
-        Self {
-            accepting: Mutex::new(true),
-        }
-    }
-
-    /// Submits while holding the facade-wide admission lock.
-    fn admit<R>(&self, submit: impl FnOnce() -> Result<R, SubmissionError>) -> Result<R, SubmissionError> {
-        let accepting = self.accepting.lock().unwrap_or_else(|error| error.into_inner());
-        if !*accepting {
-            return Err(SubmissionError::Shutdown);
-        }
-        submit()
-    }
-
-    /// Closes facade admission and waits for submissions already in progress.
-    fn close(&self) {
-        *self.accepting.lock().unwrap_or_else(|error| error.into_inner()) = false;
-    }
-
-    /// Returns whether facade submissions remain accepted.
-    fn is_open(&self) -> bool {
-        *self.accepting.lock().unwrap_or_else(|error| error.into_inner())
-    }
-}
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;
@@ -557,7 +525,7 @@ impl ExecutionServices {
 
     /// Requests graceful shutdown for every execution domain.
     pub fn shutdown(&self) {
-        self.admission.close();
+        self.admission.request_shutdown();
         self.blocking.shutdown();
         self.cpu.shutdown();
         self.tokio_blocking.shutdown();
@@ -571,7 +539,7 @@ impl ExecutionServices {
     /// A per-domain aggregate report describing queued, running, and cancelled
     /// work observed during shutdown.
     pub fn stop(&self) -> ExecutionServicesStopReport {
-        self.admission.close();
+        self.admission.request_stop();
         ExecutionServicesStopReport {
             blocking: self.blocking.stop(),
             cpu: self.cpu.stop(),
@@ -584,34 +552,21 @@ impl ExecutionServices {
     ///
     /// # Returns
     ///
-    /// [`ExecutorServiceLifecycle::Terminated`] if all domains have
-    /// terminated; [`ExecutorServiceLifecycle::Stopping`] if any domain is
-    /// stopping; [`ExecutorServiceLifecycle::ShuttingDown`] if any domain is no
-    /// longer running; otherwise [`ExecutorServiceLifecycle::Running`].
+    /// [`ExecutorServiceLifecycle::Terminated`] if all domains have terminated.
+    /// Before termination, an aggregate stop request remains
+    /// [`ExecutorServiceLifecycle::Stopping`] even if some domains have already
+    /// terminated. A graceful shutdown request reports
+    /// [`ExecutorServiceLifecycle::ShuttingDown`]. If a domain is stopped
+    /// independently while aggregate admission is still open, its stopping
+    /// state takes precedence over graceful shutdown in the aggregate result.
     #[must_use]
     pub fn lifecycle(&self) -> ExecutorServiceLifecycle {
-        let lifecycles = [
+        self.admission.lifecycle([
             self.blocking.lifecycle(),
             self.cpu.lifecycle(),
             self.tokio_blocking.lifecycle(),
             self.io.lifecycle(),
-        ];
-        if lifecycles
-            .iter()
-            .all(|state| *state == ExecutorServiceLifecycle::Terminated)
-        {
-            ExecutorServiceLifecycle::Terminated
-        } else if lifecycles.contains(&ExecutorServiceLifecycle::Stopping) {
-            ExecutorServiceLifecycle::Stopping
-        } else if !self.admission.is_open()
-            || lifecycles
-                .iter()
-                .any(|state| *state != ExecutorServiceLifecycle::Running)
-        {
-            ExecutorServiceLifecycle::ShuttingDown
-        } else {
-            ExecutorServiceLifecycle::Running
-        }
+        ])
     }
 
     /// Returns whether every execution domain is running.
@@ -641,8 +596,8 @@ impl ExecutionServices {
     ///
     /// # Returns
     ///
-    /// `true` when the aggregate lifecycle is
-    /// [`ExecutorServiceLifecycle::Stopping`].
+    /// `true` after an aggregate stop request and until every domain is
+    /// terminated, or while any domain is independently stopping.
     #[must_use]
     #[inline]
     pub fn is_stopping(&self) -> bool {

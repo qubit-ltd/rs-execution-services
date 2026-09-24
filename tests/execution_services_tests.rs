@@ -23,6 +23,7 @@ use tokio::runtime::Builder;
 use tokio::runtime::Handle;
 use tokio::runtime::Runtime;
 use tokio::select;
+use tokio::sync::oneshot;
 use tokio::task::yield_now;
 use tokio::test as tokio_test;
 
@@ -357,7 +358,7 @@ async fn test_execution_services_stop_aggregates_reports() {
         .recv_timeout(Duration::from_secs(2))
         .expect("Tokio blocking task should start before stop");
 
-    let (io_started_sender, io_started_receiver) = tokio::sync::oneshot::channel();
+    let (io_started_sender, io_started_receiver) = oneshot::channel();
     let io = services
         .spawn_io(async move {
             io_started_sender
@@ -428,7 +429,7 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() {
     let services = ExecutionServices::builder(Handle::current())
         .blocking_pool_size(1)
@@ -459,7 +460,7 @@ async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() 
         .expect("execution domains should terminate");
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutdown() {
     let services = ExecutionServices::builder(Handle::current())
         .blocking_pool_size(1)
@@ -489,6 +490,45 @@ async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutd
         .await_termination()
         .await
         .expect("execution domains should terminate");
+}
+
+#[tokio_test]
+async fn test_execution_services_stop_intent_survives_shutdown() {
+    let services = ExecutionServices::builder(Handle::current())
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (release_sender, release_receiver) = mpsc::channel();
+
+    services
+        .submit_blocking(move || {
+            started_sender
+                .send(())
+                .expect("blocking task should report that it started");
+            release_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("blocking task should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("blocking domain should accept the task");
+    started_receiver
+        .recv_timeout(Duration::from_secs(5))
+        .expect("blocking task should start");
+
+    services.shutdown();
+    let _report = services.stop();
+    services.shutdown();
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
+    assert!(services.is_stopping());
+
+    release_sender.send(()).expect("blocking task should be released");
+    services
+        .await_termination()
+        .await
+        .expect("all execution domains should terminate");
+    assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
 #[test]
