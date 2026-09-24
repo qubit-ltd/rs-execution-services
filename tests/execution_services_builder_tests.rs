@@ -14,10 +14,13 @@ use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
+use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
 use tokio::runtime::Builder;
+use tokio::runtime::Handle;
 use tokio::runtime::Runtime;
+use tokio::test as tokio_test;
 
 fn create_runtime() -> Runtime {
     Builder::new_current_thread()
@@ -180,9 +183,9 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
         .expect("all execution domains should terminate");
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn test_execution_services_builder_configures_independent_tokio_capacities() {
-    let services = ExecutionServices::builder(tokio::runtime::Handle::current())
+    let services = ExecutionServices::builder(Handle::current())
         .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .io_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .build()
@@ -224,5 +227,68 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
         .await
         .expect("execution domains should terminate");
     blocking.await.expect("running Tokio blocking task should finish");
-    assert!(matches!(io.await, Err(qubit_executor::TaskExecutionError::Cancelled)));
+    assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
+}
+
+#[test]
+fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills() {
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder(runtime.handle().clone())
+        .blocking_core_pool_size(1)
+        .blocking_maximum_pool_size(2)
+        .blocking_queue_capacity(1)
+        .cpu_threads(1)
+        .build()
+        .expect("execution services should be created");
+    let (started_sender, started_receiver) = mpsc::channel();
+    let (first_release_sender, first_release_receiver) = mpsc::channel();
+    let (second_release_sender, second_release_receiver) = mpsc::channel();
+
+    let blocking_started_sender = started_sender.clone();
+    services
+        .submit_blocking(move || {
+            blocking_started_sender
+                .send(1)
+                .expect("core worker should report that it started");
+            first_release_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("core worker should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("core worker task should be accepted");
+    assert_eq!(
+        started_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .expect("core worker should start"),
+        1,
+    );
+
+    services
+        .submit_blocking(move || {
+            started_sender
+                .send(2)
+                .expect("additional worker should report that it started");
+            second_release_receiver
+                .recv_timeout(Duration::from_secs(5))
+                .expect("additional worker should be released");
+            Ok::<(), io::Error>(())
+        })
+        .expect("one task should fit in the bounded queue");
+    services
+        .submit_blocking(|| Ok::<(), io::Error>(()))
+        .expect("a full queue should trigger the configured additional worker");
+
+    let second_started = started_receiver.recv_timeout(Duration::from_secs(2)) == Ok(2);
+    first_release_sender.send(()).expect("core worker should be released");
+    second_release_sender
+        .send(())
+        .expect("additional worker should be released");
+    services.shutdown();
+    runtime
+        .block_on(services.await_termination())
+        .expect("all execution domains should terminate");
+    assert!(
+        second_started,
+        "the bounded queue should cause a second worker to start"
+    );
 }
