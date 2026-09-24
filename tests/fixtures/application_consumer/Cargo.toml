@@ -1,0 +1,9 @@
+[package]
+name = "qubit-execution-services-application-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+qubit-execution-services = { path = "../../.." }
+tokio = { version = "^1.53", features = ["rt-multi-thread", "time"] }
