@@ -604,6 +604,7 @@ impl ExecutionServices {
     /// # Returns
     ///
     /// A future that resolves after all execution domains have terminated.
+    #[must_use]
     pub fn await_termination(&self) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {
         Box::pin(async move {
             let blocking = Arc::clone(&self.blocking);

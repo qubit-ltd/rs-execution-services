@@ -25,6 +25,7 @@ use qubit_executor::service::StopReport;
 /// };
 /// assert_eq!(report.total_queued(), 1);
 /// ```
+#[must_use]
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionServicesStopReport {
     /// Stop report for the blocking executor domain.

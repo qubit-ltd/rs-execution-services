@@ -46,6 +46,7 @@ use super::TokioBlockingExecutorService;
 /// # Ok(())
 /// # }
 /// ```
+#[must_use]
 #[derive(Clone)]
 pub struct ExecutionServicesBuilder {
     /// Tokio runtime used to create the Tokio-backed execution domains.
