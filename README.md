@@ -44,7 +44,7 @@ assert_eq!(cpu.get()?, 55);
 assert_eq!(io.await?, 42);
 
 services.shutdown();
-services.await_termination().await;
+services.await_termination().await?;
 # Ok(())
 # }
 ```
@@ -57,6 +57,8 @@ services.await_termination().await;
 - Aggregate lifecycle operations, graceful shutdown, abrupt stop, and per-domain stop counts.
 
 The CPU domain can bound accepted unfinished work and returns `SubmissionError::Saturated` when that capacity is full. A bounded blocking queue can allow the blocking pool to grow beyond its core size; an unbounded queue continues queueing after the core size is reached. See the user guide for configuration and shutdown details.
+
+Stop counts are per-domain observations taken sequentially. In particular, the Tokio IO `running` count includes accepted futures that have not completed, whether or not they are currently being polled; `total_running()` is not a global concurrency snapshot.
 
 ## Learn More
 

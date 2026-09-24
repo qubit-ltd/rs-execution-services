@@ -35,6 +35,10 @@ pub struct ExecutionServicesStopReport {
     /// Stop report for the Tokio blocking executor domain.
     pub tokio_blocking: StopReport,
     /// Stop report for the Tokio async IO executor domain.
+    ///
+    /// Its `running` field counts accepted futures that had not completed when
+    /// stop was requested; it does not indicate which futures were being
+    /// polled.
     pub io: StopReport,
 }
 
@@ -43,18 +47,22 @@ impl ExecutionServicesStopReport {
     ///
     /// # Returns
     ///
-    /// The sum of every domain's queued-task count.
+    /// The sum of the per-domain queued counts observed during the sequential
+    /// stop calls. The result is not an atomic cross-domain snapshot.
     #[must_use]
     #[inline]
     pub const fn total_queued(&self) -> usize {
         self.blocking.queued + self.cpu.queued + self.tokio_blocking.queued + self.io.queued
     }
 
-    /// Returns the total running task count across all execution domains.
+    /// Returns the sum of the per-domain `running` counts.
     ///
     /// # Returns
     ///
-    /// The sum of every domain's running-task count.
+    /// The arithmetic sum of the four stop reports' `running` fields. For the
+    /// Tokio IO domain this includes accepted futures that had not completed,
+    /// whether or not they were being polled. The per-domain counts are sampled
+    /// sequentially and do not form an atomic cross-domain snapshot.
     #[must_use]
     #[inline]
     pub const fn total_running(&self) -> usize {
@@ -65,7 +73,10 @@ impl ExecutionServicesStopReport {
     ///
     /// # Returns
     ///
-    /// The sum of every domain's cancelled-task count.
+    /// The sum of the per-domain cancellation counts observed during the
+    /// sequential stop calls. The result is not an atomic cross-domain
+    /// snapshot; each domain reports cancellation according to its own
+    /// contract.
     #[must_use]
     #[inline]
     pub const fn total_cancelled(&self) -> usize {
