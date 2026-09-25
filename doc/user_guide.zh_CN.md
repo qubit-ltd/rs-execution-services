@@ -96,7 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 阻塞线程池的扩展和排队
 
-blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不计入此队列容量。队列满时，新的 blocking 提交会返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity(n)` 选择其他有限容量，也可以显式调用 `blocking_unbounded_queue()` 使用无界队列。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。
+blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不计入此队列容量。有界队列满后，如果当前 worker 数尚未达到 `blocking_maximum_pool_size`，线程池还可以启动 worker；无法继续增加 worker 时，新的 blocking 提交才会因容量已满而返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity(n)` 选择其他有限容量，也可以显式调用 `blocking_unbounded_queue()` 使用无界队列。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。
 
 默认情况下，blocking 域的核心线程数和最大线程数都等于检测到的 CPU 并行度。长时间阻塞的调用可能占满所有 worker。队列尚有空间时，线程池不会扩容，因此该默认值限制并发数，不会随积压自动调整。应根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到最大线程数前增加 worker；无界队列会在核心线程数达到后继续排队，不会触发突发扩容。
 
