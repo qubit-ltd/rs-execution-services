@@ -19,9 +19,10 @@ fn lock_intent(intent: &Mutex<FacadeIntent>) -> MutexGuard<'_, FacadeIntent> {
     intent.lock().unwrap_or_else(|error| error.into_inner())
 }
 
-/// Serializes facade submissions against aggregate shutdown requests.
+/// Tracks facade admission intent and aggregate shutdown requests.
 pub struct ExecutionServicesAdmission {
-    /// Current aggregate intent, protected by the same lock as submissions.
+    /// Current aggregate intent, protected while admission is checked or
+    /// updated.
     intent: Mutex<FacadeIntent>,
 }
 
@@ -33,13 +34,15 @@ impl ExecutionServicesAdmission {
         }
     }
 
-    /// Calls `submit` while holding admission if the facade is still running.
-    ///
-    /// Holding the lock until the underlying service accepts or rejects work
-    /// makes an in-flight submission finish before shutdown closes admission.
+    /// Checks facade admission, then calls `submit` without holding the intent
+    /// lock. An overlapping shutdown may cause the underlying domain to
+    /// reject work.
     pub fn admit<R>(&self, submit: impl FnOnce() -> Result<R, SubmissionError>) -> Result<R, SubmissionError> {
-        let intent = lock_intent(&self.intent);
-        if *intent != FacadeIntent::Running {
+        let accepting = {
+            let intent = lock_intent(&self.intent);
+            *intent == FacadeIntent::Running
+        };
+        if !accepting {
             return Err(SubmissionError::Shutdown);
         }
         submit()
@@ -152,6 +155,17 @@ mod tests {
             admission.lifecycle([ExecutorServiceLifecycle::Running; 4]),
             ExecutorServiceLifecycle::Stopping
         );
+    }
+
+    #[test]
+    fn test_admit_callback_may_request_shutdown() {
+        let admission = ExecutionServicesAdmission::new();
+        let result = admission.admit(|| {
+            admission.request_shutdown();
+            Err::<(), _>(SubmissionError::Saturated)
+        });
+        assert_eq!(result, Err(SubmissionError::Saturated));
+        assert!(admission.intent() == FacadeIntent::ShuttingDown);
     }
 
     #[test]

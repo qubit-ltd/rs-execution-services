@@ -51,6 +51,12 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// - `tokio_blocking`: blocking tasks routed through Tokio `spawn_blocking`.
 /// - `io`: async futures spawned on Tokio's async runtime.
 ///
+/// Each submission checks facade admission before delegating to its domain.
+/// The facade releases its admission lock before invoking a domain submission
+/// or dropping a rejected task. A submission that passed admission may overlap
+/// shutdown or stop; its domain decides whether to accept or reject it. Once
+/// either operation returns, all four domains have been closed to new work.
+///
 /// # Examples
 ///
 /// ```
@@ -521,6 +527,11 @@ impl ExecutionServices {
     }
 
     /// Requests graceful shutdown for every execution domain.
+    ///
+    /// The facade records the shutdown intent before closing the domains. A
+    /// submission that already passed the facade admission check may overlap
+    /// domain shutdown and may be accepted or rejected by that domain. When
+    /// this method returns, all four domains reject new submissions.
     pub fn shutdown(&self) {
         self.admission.request_shutdown();
         self.blocking.shutdown();
@@ -530,6 +541,12 @@ impl ExecutionServices {
     }
 
     /// Requests abrupt stop for every execution domain.
+    ///
+    /// The facade records the stop intent before stopping the domains. A
+    /// submission that already passed the facade admission check may overlap
+    /// domain shutdown and may be accepted or rejected by that domain. When
+    /// this method returns, all four domains reject new submissions. The
+    /// report samples domains sequentially in facade order.
     ///
     /// # Returns
     ///
