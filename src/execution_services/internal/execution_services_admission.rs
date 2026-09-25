@@ -101,6 +101,9 @@ fn aggregate_lifecycle(intent: FacadeIntent, states: [ExecutorServiceLifecycle; 
 
 #[cfg(test)]
 mod tests {
+    use std::panic::catch_unwind;
+    use std::sync::Mutex;
+
     use qubit_executor::service::ExecutorServiceLifecycle;
     use qubit_executor::service::SubmissionError;
 
@@ -138,6 +141,9 @@ mod tests {
 
     #[test]
     fn test_admission_closes_after_shutdown_and_stop_is_not_downgraded() {
+        use ExecutorServiceLifecycle::Running;
+        use ExecutorServiceLifecycle::Stopping;
+
         let admission = ExecutionServicesAdmission::new();
         let accepted = admission.admit(|| Ok(7));
         assert_eq!(accepted, Ok(7));
@@ -151,10 +157,7 @@ mod tests {
         assert!(admission.intent() == FacadeIntent::Stopping);
         admission.request_shutdown();
         assert!(admission.intent() == FacadeIntent::Stopping);
-        assert_eq!(
-            admission.lifecycle([ExecutorServiceLifecycle::Running; 4]),
-            ExecutorServiceLifecycle::Stopping
-        );
+        assert_eq!(admission.lifecycle([Running; 4]), Stopping);
     }
 
     #[test]
@@ -170,8 +173,8 @@ mod tests {
 
     #[test]
     fn test_admission_recovers_a_poisoned_intent_lock() {
-        let intent = std::sync::Mutex::new(FacadeIntent::Running);
-        let _ = std::panic::catch_unwind(|| {
+        let intent = Mutex::new(FacadeIntent::Running);
+        let _ = catch_unwind(|| {
             let _guard = intent.lock().expect("initial lock");
             panic!("poison admission lock");
         });
