@@ -187,6 +187,91 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
 }
 
 #[test]
+fn test_rejected_blocking_task_drop_may_shutdown_facade() {
+    struct ShutdownOnDrop(std::sync::Weak<ExecutionServices>);
+    impl Drop for ShutdownOnDrop {
+        fn drop(&mut self) {
+            if let Some(services) = self.0.upgrade() {
+                services.shutdown();
+            }
+        }
+    }
+
+    let runtime = create_runtime();
+    let services = Arc::new(
+        ExecutionServices::builder(runtime.handle().clone())
+            .blocking_pool_size(1)
+            .blocking_queue_capacity(1)
+            .cpu_threads(1)
+            .build()
+            .expect("services should build"),
+    );
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    services
+        .submit_blocking(move || {
+            started_tx.send(()).expect("start signal");
+            release_rx.recv().expect("release signal");
+            Ok::<(), io::Error>(())
+        })
+        .expect("running task should be accepted");
+    started_rx.recv_timeout(Duration::from_secs(2)).expect("worker started");
+    services
+        .submit_blocking(|| Ok::<(), io::Error>(()))
+        .expect("queued task should be accepted");
+
+    let mut on_drop = Some(ShutdownOnDrop(Arc::downgrade(&services)));
+    let result = services.submit_blocking(move || {
+        drop(on_drop.take());
+        Ok::<(), io::Error>(())
+    });
+    assert!(matches!(result, Err(SubmissionError::Saturated)));
+    assert!(services.is_shutting_down());
+    release_tx.send(()).expect("release worker");
+    runtime.block_on(services.await_termination());
+    assert!(services.is_terminated());
+}
+
+#[test]
+fn test_closed_facade_rejected_task_drop_may_request_stop() {
+    struct StopOnDrop {
+        services: std::sync::Weak<ExecutionServices>,
+        dropped: Arc<std::sync::atomic::AtomicBool>,
+    }
+    impl Drop for StopOnDrop {
+        fn drop(&mut self) {
+            self.dropped.store(true, std::sync::atomic::Ordering::SeqCst);
+            if let Some(services) = self.services.upgrade() {
+                let _ = services.stop();
+            }
+        }
+    }
+
+    let runtime = create_runtime();
+    let services = Arc::new(
+        ExecutionServices::builder(runtime.handle().clone())
+            .blocking_pool_size(1)
+            .cpu_threads(1)
+            .build()
+            .expect("services should build"),
+    );
+    services.shutdown();
+    let dropped = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut on_drop = Some(StopOnDrop {
+        services: Arc::downgrade(&services),
+        dropped: Arc::clone(&dropped),
+    });
+    let result = services.submit_blocking(move || {
+        drop(on_drop.take());
+        Ok::<(), io::Error>(())
+    });
+    assert!(matches!(result, Err(SubmissionError::Shutdown)));
+    assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
+    runtime.block_on(services.await_termination());
+    assert!(services.is_terminated());
+}
+
+#[test]
 fn test_await_termination_completes_with_one_tokio_blocking_thread() {
     let runtime = Builder::new_multi_thread()
         .worker_threads(1)
@@ -602,7 +687,7 @@ async fn test_execution_services_stop_intent_survives_shutdown() {
 }
 
 #[test]
-fn test_execution_services_serializes_concurrent_submissions_and_shutdown() {
+fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
     let runtime = create_runtime();
     for _ in 0..8 {
         let services = Arc::new(
