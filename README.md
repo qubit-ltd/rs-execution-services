@@ -74,7 +74,7 @@ The blocking pool defaults both its core and maximum thread counts to the detect
 
 The facade checks admission before delegating each submission. A submission that overlaps shutdown or stop may be accepted or rejected by its underlying domain; after either shutdown operation returns, all four domains reject new facade submissions. The facade never holds its admission lock while invoking a domain submission or dropping a rejected task. Stop counts are per-domain observations taken sequentially. In particular, the Tokio IO `running` count includes accepted futures that have not completed, whether or not they are currently being polled; `total_running()` is not a global concurrency snapshot.
 
-Use this facade when an application needs one owner to submit to and close several execution domains together. A component that needs only one domain or its specific controls can depend directly on that executor crate. For example, `rs-task` needs `PoolJobTicket` and `ThreadPoolStats`, so it continues to use `qubit-thread-pool`; its design document mentions this facade only as a possible future execution backend. `rs-event-bus` also uses lower-level crates directly. No production downstream consumer of this facade has been confirmed. The application consumer fixture tests the published API boundary and does not establish production adoption.
+Use this facade when an application needs one owner to submit to and close several execution domains together. A component that needs only one domain or its specific controls can depend directly on that executor crate. In the current `rust-common` checkout, `rs-task` runs its local engine on Tokio and `rs-event-bus` leaves future polling to its caller; neither is a production consumer of this facade. The application consumer fixture verifies the public API boundary, but does not establish production adoption.
 
 ## Learn More
 
@@ -84,6 +84,16 @@ Use this facade when an application needs one owner to submit to and close sever
 - [中文 README](README.zh_CN.md)
 
 ## Testing
+
+The repository uses the adjacent `rs-thread-pool`, `rs-rayon-executor`, and `rs-tokio-executor` checkouts while developing. Prepare those local dependencies before running the Cargo commands below:
+
+```bash
+./.infra/tools/prepare-local-path-dependencies.sh
+```
+
+Applications using a published release need only the matching crates.io versions. Publishing this crate also requires its declared `qubit-thread-pool` version to be available in the registry.
+
+Use `cargo test --locked` and `cargo test --locked --all-features` when checking that the committed lockfile resolves without changes.
 
 ```bash
 # Run tests with the default feature set

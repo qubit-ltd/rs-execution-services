@@ -37,6 +37,8 @@ qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
+从源码开发本仓库时，先在 crate 根目录运行 `./.infra/tools/prepare-local-path-dependencies.sh`。该脚本会准备开发清单所用的相邻 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码目录。应用依赖已发布的 crate 时不需要这些同级仓库；发布本 crate 前，registry 中必须已有清单所声明的 `qubit-thread-pool` 版本。
+
 已有 Tokio runtime 的异步应用可以把当前 runtime 的 handle 交给 builder，再按任务类型提交工作：
 
 ```rust
@@ -130,7 +132,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
 
-当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域或其专有控制能力的组件可以直接依赖对应的 executor crate。`rs-task` 需要 `PoolJobTicket` 和 `ThreadPoolStats`，因此继续使用 `qubit-thread-pool`；其设计文档仅将本 facade 列为未来执行后端的候选。`rs-event-bus` 也直接使用底层 crate。尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
+应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。在当前 `rust-common` 检出目录中，`rs-task` 通过 Tokio 运行本地引擎，`rs-event-bus` 则由调用方驱动 future；它们都不是本 facade 的生产消费者。应用消费者 fixture 能验证公开 API 边界，但不能证明已有生产采用。
 
 ## 错误与诊断
 

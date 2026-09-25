@@ -33,6 +33,8 @@ qubit-execution-services = "0.9"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
+When building this repository from source, first run `./.infra/tools/prepare-local-path-dependencies.sh` from the crate root. It prepares the adjacent `rs-thread-pool`, `rs-rayon-executor`, and `rs-tokio-executor` checkouts used by the development manifest. An application using the published crate does not need these sibling repositories. Publishing requires the matching `qubit-thread-pool` version to be available in the registry.
+
 For an application with a Tokio runtime, pass its handle to the builder and submit work to the appropriate domain:
 
 ```rust
@@ -126,7 +128,7 @@ The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed do
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
 
-Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain or its specific controls can depend directly on the corresponding executor crate. `rs-task` needs `PoolJobTicket` and `ThreadPoolStats`, so it continues to use `qubit-thread-pool`; its design document names this facade only as a possible future execution backend. `rs-event-bus` also uses lower-level crates directly. No production downstream consumer of this facade has been confirmed. The application consumer fixture verifies the public package boundary, not production adoption.
+Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain or its specific controls can depend directly on the corresponding executor crate. In the current `rust-common` checkout, `rs-task` runs its local engine on Tokio and `rs-event-bus` leaves future polling to its caller; neither is a production consumer of this facade. The application consumer fixture verifies the public API boundary, not production adoption.
 
 ## Errors and Diagnostics
 
