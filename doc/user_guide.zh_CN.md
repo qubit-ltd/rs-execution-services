@@ -124,7 +124,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 ### 有序关闭与强制停止
 
-`shutdown()` 和 `stop()` 首先关闭 facade 级任务准入，并与正在进行的提交串行化，然后对各执行域请求对应操作。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
+`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后对各执行域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，四个执行域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
 
 `await_termination()` 通过异步通知等待四个执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
 
@@ -135,7 +135,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 ## 错误与诊断
 
 - `ExecutionServicesBuilder::build()` 可能返回 `ExecutionServicesBuildError::Blocking` 或 `ExecutionServicesBuildError::Cpu`，分别表示 blocking 或 CPU builder 拒绝了配置。错误会保留底层 builder 错误作为来源。
-- 提交方法通过 `SubmissionError` 报告执行域拒绝任务的情况。CPU 和 Tokio 域达到配置容量时返回 `SubmissionError::Saturated`；开始关闭后，所有 facade 提交都会返回 `SubmissionError::Shutdown`，即使执行域同时已达到容量上限。
+- 提交方法通过 `SubmissionError` 报告执行域拒绝任务的情况。CPU 和 Tokio 域达到配置容量时返回 `SubmissionError::Saturated`；记录 shutdown 或 stop 意图后，到达 facade 准入检查的新提交会优先返回 `SubmissionError::Shutdown`，然后才会检查执行域容量。已经通过准入检查的重叠提交仍可能被底层执行域以 `SubmissionError::Saturated` 拒绝。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
 - 汇总关闭情况时，先检查 `ExecutionServicesStopReport` 的各域字段，再按需要读取总数。
 
@@ -146,7 +146,7 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 | `build()` 返回错误 | 根据 `Blocking` 或 `Cpu` 变体检查相应线程池配置。例如，blocking 最大线程数为零或 CPU worker 数为零都会被拒绝。 |
 | CPU 或 Tokio 提交返回 `Saturated` | 增大对应任务容量、减少未完成任务，或在提交前增加背压。 |
 | blocking 任务持续排队，没有增加 worker | 检查队列是否为无界队列。需要弹性扩展时，改用有界 `blocking_queue_capacity` 并设置更大的 `blocking_maximum_pool_size`。 |
-| 关闭时提交新任务失败 | 检查 `lifecycle()` 状态；开始关闭后停止提交。 |
+| 关闭时提交新任务失败 | 检查 `lifecycle()` 状态；记录 shutdown 或 stop 意图后，新提交会被拒绝。已经通过准入检查的提交可能与逐域关闭重叠。 |
 | `await_termination()` 一直未完成 | 检查已接收的 blocking 任务是否仍在运行或等待外部条件；有序关闭会等待底层服务终止。 |
 
 ## 限制与最佳实践
