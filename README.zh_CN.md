@@ -70,11 +70,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
 - 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
-blocking 线程池的核心数和最大线程数默认都等于检测到的 CPU 并行度，等待队列默认最多容纳 1024 个任务。长时间阻塞的调用可能占满所有 worker；队列尚未满时，等待任务不会触发扩容。请根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到配置的最大线程数前增加 worker；无界队列不会让线程池扩展到核心线程数之外。队列容量不会限制任务内存。CPU、Tokio 阻塞和 Tokio IO 域分别默认限制 1024 个尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。可通过 `tokio_blocking_task_capacity` 和 `io_task_capacity` 配置 Tokio 域。facade 记录 shutdown 或 stop 意图后，新提交会在检查执行域容量前优先返回 `SubmissionError::Shutdown`；已通过准入检查的重叠提交仍可能被执行域以 `SubmissionError::Saturated` 拒绝。配置、取消和关闭流程详见用户手册。
+blocking 线程池可配置 worker 数量和队列容量；CPU 与 Tokio 执行域会限制已接收但尚未完成的任务数。用户手册详细说明默认值、容量错误、取消和关闭行为。
 
-facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的提交，可能被对应执行域接收或拒绝；任一关闭操作返回后，四个执行域都拒绝新的 facade 提交。facade 调用底层提交或销毁被拒绝任务时不持有准入锁。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
+facade 协调四个执行域的任务提交与生命周期操作。停止报告汇总各执行域的观测值；并发行为和计数口径详见用户手册。
 
-应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。在当前 `rust-common` 检出目录中，`rs-task` 通过 Tokio 运行本地引擎，`rs-event-bus` 则由调用方驱动 future；它们都不是本 facade 的生产消费者。应用消费者 fixture 能验证公开 API 边界，但不能证明已有生产采用。
+应用需要统一向多个执行域提交任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 
 ## 延伸阅读
 
@@ -83,9 +83,9 @@ facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的
 - [API 文档](https://docs.rs/qubit-execution-services)
 - [English README](README.md)
 
-## 测试
+## 开发环境
 
-开发本仓库时，Cargo 使用相邻目录中的 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码。运行下面的 Cargo 命令前，先准备这些本地依赖：
+开发本仓库时，Cargo 使用相邻目录中的 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码。运行 Cargo 命令前，先准备这些本地依赖：
 
 ```bash
 ./.infra/tools/prepare-local-path-dependencies.sh
@@ -94,6 +94,8 @@ facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的
 应用使用已发布版本时，只需依赖 crates.io 上对应版本。发布本 crate 前，registry 也必须已有清单声明的 `qubit-thread-pool` 版本。
 
 检查已提交的锁文件能否原样解析时，请运行 `cargo test --locked` 和 `cargo test --locked --all-features`。
+
+## 测试
 
 ```bash
 # 使用默认 feature 集运行测试
