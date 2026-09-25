@@ -74,7 +74,7 @@ blocking 线程池的核心数和最大线程数默认都等于检测到的 CPU 
 
 facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的提交，可能被对应执行域接收或拒绝；任一关闭操作返回后，四个执行域都拒绝新的 facade 提交。facade 调用底层提交或销毁被拒绝任务时不持有准入锁。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
-当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域或其专有控制能力的组件可以直接依赖对应的 executor crate。例如 `rs-task` 需要 `PoolJobTicket` 和 `ThreadPoolStats`，因此继续使用 `qubit-thread-pool`；其设计文档仅将本 facade 列为未来执行后端的候选。`rs-event-bus` 也直接使用底层 crate。尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
+应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。在当前 `rust-common` 检出目录中，`rs-task` 通过 Tokio 运行本地引擎，`rs-event-bus` 则由调用方驱动 future；它们都不是本 facade 的生产消费者。应用消费者 fixture 能验证公开 API 边界，但不能证明已有生产采用。
 
 ## 延伸阅读
 
@@ -84,6 +84,16 @@ facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的
 - [English README](README.md)
 
 ## 测试
+
+开发本仓库时，Cargo 使用相邻目录中的 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码。运行下面的 Cargo 命令前，先准备这些本地依赖：
+
+```bash
+./.infra/tools/prepare-local-path-dependencies.sh
+```
+
+应用使用已发布版本时，只需依赖 crates.io 上对应版本。发布本 crate 前，registry 也必须已有清单声明的 `qubit-thread-pool` 版本。
+
+检查已提交的锁文件能否原样解析时，请运行 `cargo test --locked` 和 `cargo test --locked --all-features`。
 
 ```bash
 # 使用默认 feature 集运行测试
