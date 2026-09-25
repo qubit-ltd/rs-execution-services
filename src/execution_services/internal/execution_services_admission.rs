@@ -15,6 +15,15 @@ use qubit_executor::service::SubmissionError;
 
 use super::facade_intent::FacadeIntent;
 
+/// Locks the aggregate intent, recovering the last recorded value if poisoned.
+///
+/// # Parameters
+///
+/// * `intent` - Mutex protecting the facade's aggregate lifecycle intent.
+///
+/// # Returns
+///
+/// A guard that keeps the intent locked for the caller's read or update.
 fn lock_intent(intent: &Mutex<FacadeIntent>) -> MutexGuard<'_, FacadeIntent> {
     intent.lock().unwrap_or_else(|error| error.into_inner())
 }
