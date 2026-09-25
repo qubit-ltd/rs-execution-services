@@ -70,9 +70,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 - 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
 - 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
 
-blocking 线程池的核心数和最大线程数默认都等于检测到的 CPU 并行度，等待队列默认最多容纳 1024 个任务。长时间阻塞的调用可能占满所有 worker；队列尚未满时，等待任务不会触发扩容。请根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到配置的最大线程数前增加 worker；无界队列不会让线程池扩展到核心线程数之外。队列容量不会限制任务内存。CPU、Tokio 阻塞和 Tokio IO 域分别默认限制 1024 个尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。可通过 `tokio_blocking_task_capacity` 和 `io_task_capacity` 配置 Tokio 域。shutdown 或 stop 关闭 facade 准入后，`SubmissionError::Shutdown` 优先于容量已满的错误。配置、取消和关闭流程详见用户手册。
+blocking 线程池的核心数和最大线程数默认都等于检测到的 CPU 并行度，等待队列默认最多容纳 1024 个任务。长时间阻塞的调用可能占满所有 worker；队列尚未满时，等待任务不会触发扩容。请根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到配置的最大线程数前增加 worker；无界队列不会让线程池扩展到核心线程数之外。队列容量不会限制任务内存。CPU、Tokio 阻塞和 Tokio IO 域分别默认限制 1024 个尚未完成的已接收任务，并在达到容量时返回 `SubmissionError::Saturated`。可通过 `tokio_blocking_task_capacity` 和 `io_task_capacity` 配置 Tokio 域。facade 记录 shutdown 或 stop 意图后，新提交会在检查执行域容量前优先返回 `SubmissionError::Shutdown`；已通过准入检查的重叠提交仍可能被执行域以 `SubmissionError::Saturated` 拒绝。配置、取消和关闭流程详见用户手册。
 
-facade 会将提交与 shutdown、stop 串行化。任一操作关闭准入后，所有执行域都拒绝新的 facade 提交。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
+facade 在委托底层执行域前检查准入。与 shutdown 或 stop 重叠的提交，可能被对应执行域接收或拒绝；任一关闭操作返回后，四个执行域都拒绝新的 facade 提交。facade 调用底层提交或销毁被拒绝任务时不持有准入锁。停止计数来自各执行域依次停止时的观测值。特别是，Tokio IO 的 `running` 还包括已接收但未完成的 future，不表示它们此刻正在被 poll；`total_running()` 不是全局并发度快照。
 
 当应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可使用此 facade。只需要一个执行域或其专有控制能力的组件可以直接依赖对应的 executor crate。例如 `rs-task` 需要 `PoolJobTicket` 和 `ThreadPoolStats`，因此继续使用 `qubit-thread-pool`；其设计文档仅将本 facade 列为未来执行后端的候选。`rs-event-bus` 也直接使用底层 crate。尚未确认有生产下游使用本 facade。应用消费者 fixture 用于验证公开 API 边界，不能作为生产采用的证据。
 
