@@ -24,8 +24,10 @@ use tokio::runtime::Handle;
 use tokio::runtime::Runtime;
 use tokio::select;
 use tokio::sync::oneshot;
+use tokio::task::spawn_blocking;
 use tokio::task::yield_now;
 use tokio::test as tokio_test;
+use tokio::time::timeout;
 
 fn create_runtime() -> Runtime {
     Builder::new_current_thread()
@@ -352,7 +354,7 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
     services
         .spawn_io(async move {
             io_gate_rx.await.expect("IO gate should open");
-            tokio::task::spawn_blocking(move || {
+            spawn_blocking(move || {
                 let _ = io_release_tx.send(());
             })
             .await
@@ -364,16 +366,12 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
 
     runtime.block_on(async {
         let mut wait = Box::pin(services.await_termination());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut wait)
-                .await
-                .is_err()
-        );
+        assert!(timeout(Duration::from_millis(20), &mut wait).await.is_err());
         io_gate_tx.send(()).expect("IO gate should open");
-        let completed = tokio::time::timeout(Duration::from_secs(2), &mut wait).await;
+        let completed = timeout(Duration::from_secs(2), &mut wait).await;
         if completed.is_err() {
             let _ = release_tx.send(());
-            let _ = tokio::time::timeout(Duration::from_secs(2), &mut wait).await;
+            let _ = timeout(Duration::from_secs(2), &mut wait).await;
         }
         assert!(completed.is_ok(), "termination wait starved IO spawn_blocking");
     });
@@ -406,14 +404,10 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
 
     runtime.block_on(async {
         let mut wait = Box::pin(services.await_termination());
-        assert!(
-            tokio::time::timeout(Duration::from_millis(20), &mut wait)
-                .await
-                .is_err()
-        );
+        assert!(timeout(Duration::from_millis(20), &mut wait).await.is_err());
         drop(wait);
-        let sentinel = tokio::task::spawn_blocking(|| 42);
-        let completed = tokio::time::timeout(Duration::from_secs(2), sentinel).await;
+        let sentinel = spawn_blocking(|| 42);
+        let completed = timeout(Duration::from_secs(2), sentinel).await;
         release_tx.send(()).expect("blocking task should release");
         services.await_termination().await;
         assert!(completed.is_ok(), "cancelled wait retained a blocking worker");

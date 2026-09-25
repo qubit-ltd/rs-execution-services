@@ -25,6 +25,7 @@ use qubit_tokio_executor::TokioBlockingTaskHandle;
 use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 use qubit_tokio_executor::TokioTaskHandle;
+use tokio::join;
 use tokio::runtime::Handle;
 
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
@@ -653,7 +654,7 @@ impl ExecutionServices {
     /// Request shutdown or stop before awaiting termination; this method only
     /// waits for the domains to finish.
     pub async fn await_termination(&self) {
-        tokio::join!(
+        join!(
             self.blocking.await_termination(),
             self.cpu.await_termination(),
             self.tokio_blocking.await_termination(),
