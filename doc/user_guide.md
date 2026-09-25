@@ -92,7 +92,7 @@ Submission itself can fail, so propagate or handle its `Result` at the call site
 
 ### Blocking pool growth and queueing
 
-The default blocking queue holds up to 1024 waiting tasks; running tasks are outside this queue limit. A full queue rejects another blocking submission with `SubmissionError::Saturated`. Set `blocking_queue_capacity(n)` to choose another finite limit, or call `blocking_unbounded_queue()` explicitly to restore unbounded queueing. Choose a limit based on expected task sizes and submission rates; this queue limit does not cap task memory.
+The default blocking queue holds up to 1024 waiting tasks; running tasks are outside this queue limit. When a bounded queue is full, the pool can start another worker if it has not reached `blocking_maximum_pool_size`. If it cannot add a worker, a new blocking submission is rejected with `SubmissionError::Saturated`. Set `blocking_queue_capacity(n)` to choose another finite limit, or call `blocking_unbounded_queue()` explicitly to restore unbounded queueing. Choose a limit based on expected task sizes and submission rates; this queue limit does not cap task memory.
 
 By default, both the core and maximum blocking worker counts equal the detected CPU parallelism. Long blocking calls can occupy every worker. The pool does not grow while the bounded queue still has room, so this default limits concurrency rather than adapting to a backlog. Choose `blocking_core_pool_size`, `blocking_maximum_pool_size`, and a finite `blocking_queue_capacity` from the expected simultaneous blocking work and acceptable backlog. A full bounded queue lets the pool add workers up to the maximum; an unbounded queue keeps queueing after the core size is reached and does not trigger burst workers.
 
