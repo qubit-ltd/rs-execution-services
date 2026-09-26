@@ -9,7 +9,6 @@ use qubit_event_bus::spi::ShutdownMode;
 use qubit_execution_services::ExecutionServices;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::ApplicationContext;
-use qubit_ioc::BuildError;
 use qubit_ioc::ContainerBuilder;
 use qubit_ioc::Dependency;
 use qubit_ioc::FactoryError;
@@ -73,13 +72,13 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use super::BuildError;
     use super::ContainerBuilder;
     use super::Dependency;
     use super::EventBus;
     use super::EventBusRegistry;
     use super::FactoryError;
     use super::Arc;
+    use qubit_ioc::BuildError;
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
     use std::io;
