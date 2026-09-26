@@ -15,7 +15,7 @@ Qubit Execution Services 为 Rust 应用提供统一的任务分发入口：同�
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.9"
+qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -78,9 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 blocking 线程池可配置 worker 数量和队列容量；CPU 与 Tokio 执行域会限制已接收但尚未完成的任务数。用户手册详细说明默认值、容量错误、取消和关闭行为。
 
+blocking 和 CPU 执行域会分别创建线程池，Tokio runtime 则由应用单独配置。各域默认值只是单域起点，不代表进程总线程数或内存预算。blocking 队列默认最多容纳 1024 个等待任务；CPU 和 Tokio 执行域默认各接受最多 1024 个未完成任务。应按预期并发量配置各域容量，并在达到容量前对提交端施加背压。
+
 facade 协调已启用执行域的任务提交与生命周期操作。停止报告按域提供可选观测值，不计算跨域总数。
 
 应用需要统一向多个执行域提交任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
+
+关闭应用时，先停止会继续提交工作的业务组件，再调用 `shutdown()` 并等待 `await_termination()`；等待期间应保持 Tokio runtime 运行。完整顺序见[应用关闭示例](examples/application_shutdown.rs)和用户手册。
 
 ## 延伸阅读
 

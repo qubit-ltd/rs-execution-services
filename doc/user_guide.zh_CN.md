@@ -2,7 +2,7 @@
 
 [English user guide](user_guide.md) | [中文 README](../README.zh_CN.md)
 
-本手册面向使用 `qubit-execution-services` 0.9.0 的 Rust 应用开发者，介绍如何按任务特点选择执行域、配置受本 crate 管理的线程池、处理提交和执行结果，并在应用退出时关闭服务。本 crate 面向应用层整合；如果库只需要一种执行能力，通常直接依赖对应的底层 crate 更合适。
+本手册面向使用 `qubit-execution-services` 0.10.0 的 Rust 应用开发者，介绍如何按任务特点选择执行域、配置受本 crate 管理的线程池、处理提交和执行结果，并在应用退出时关闭服务。本 crate 面向应用层整合；如果库只需要一种执行能力，通常直接依赖对应的底层 crate 更合适。
 
 ## 手册目标与读者
 
@@ -33,7 +33,7 @@
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.9"
+qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -89,10 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 核心工作流
 
-1. **创建 facade。** 从 `ExecutionServices::builder()` 开始，显式启用所需执行域；仅启用 Tokio 域时才调用 `runtime(handle)`。`ExecutionServices::new(runtime_handle)` 仍是启用四域的快捷构造。
+1. **创建 facade。** 从 `ExecutionServices::builder()` 开始，逐个显式启用所需执行域；仅启用 `tokio_blocking` 或 `io` 时才调用 `runtime(handle)`。纯 blocking 或 CPU 配置不需要 Tokio runtime。至少启用一个执行域后，`build()` 才能成功。
 2. **按任务特点路由。** 可能等待阻塞 API 的同步工作使用 `submit_blocking*`；CPU 密集型同步工作使用 `submit_cpu*`；需要接入 Tokio 的阻塞函数使用 `submit_tokio_blocking*`；异步 future 使用 `spawn_io`。
 3. **选择结果观察方式。** `submit_*` runnable 方法只返回是否接收任务，不提供结果 handle。callable 方法返回可读取任务结果的 handle。需要查询状态或取消任务时，使用 `submit_tracked_*` 变体。
-4. **停止接收任务并等待退出。** `shutdown()` 对已启用执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。所有已启用域终止后，该方法返回 `()`。
+4. **停止接收任务并等待退出。** 先停止仍可能提交任务的应用组件，并等待它们退出。然后调用 `shutdown()`，对所有已启用域发起优雅关闭。等待 `await_termination()` 完成后，再释放任务使用的资源或停止传入的 Tokio runtime。所有已启用域终止后，该方法返回 `()`。
 
 提交操作本身可能失败，应在调用处处理或向上传递其 `Result`。任务被接收后仍可能以错误结束；需要确认任务结果时，应检查 handle。
 
@@ -103,6 +103,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不计入此队列容量。有界队列满后，如果当前 worker 数尚未达到 `blocking_maximum_pool_size`，线程池还可以启动 worker；无法继续增加 worker 时，新的 blocking 提交才会因容量已满而返回 `SubmissionError::Saturated`。可通过 `blocking_queue_capacity(n)` 选择其他有限容量，也可以显式调用 `blocking_unbounded_queue()` 使用无界队列。应根据预期任务大小和提交速率选择容量；队列容量不会限制任务内存。
 
 默认情况下，blocking 域的核心线程数和最大线程数都等于检测到的 CPU 并行度。长时间阻塞的调用可能占满所有 worker。队列尚有空间时，线程池不会扩容，因此该默认值限制并发数，不会随积压自动调整。应根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到最大线程数前增加 worker；无界队列会在核心线程数达到后继续排队，不会触发突发扩容。
+
+CPU 池也默认使用检测到的 CPU 并行度，且与 blocking 池相互独立。同时启用两者会创建两组 worker；Tokio 还可能按应用 runtime 的设置创建额外的调度线程和阻塞线程。这些都是单域默认值，不是进程总线程数或内存预算。blocking 队列默认容纳 1024 个等待任务；CPU、Tokio blocking 和 IO 域默认各接受最多 1024 个尚未完成的任务。容量统计任务数量，不统计任务占用内存。应依据峰值并发配置线程数和容量，并在提交接近容量时施加背压。
 
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
@@ -154,6 +156,10 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 `await_termination()` 通过异步通知等待已启用执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
+
+### 应用关闭顺序
+
+facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。先停止这些任务生产者并等待它们退出，再调用 `services.shutdown()`，然后等待 `services.await_termination()`。等待期间要保持传入的 Tokio runtime 运行；所有任务完成后才释放它们使用的资源。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了生产者和两个执行域的关闭过程。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
 
 应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。在当前 `rust-common` 检出目录中，`rs-task` 通过 Tokio 运行本地引擎，`rs-event-bus` 则由调用方驱动 future；它们都不是本 facade 的生产消费者。应用消费者 fixture 能验证公开 API 边界，但不能证明已有生产采用。
 

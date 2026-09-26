@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) | [README](../README.md)
 
-This guide is for Rust application developers using `qubit-execution-services` 0.9.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
+This guide is for Rust application developers using `qubit-execution-services` 0.10.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
 
 ## Conceptual Model
 
@@ -29,7 +29,7 @@ The crate requires Rust 1.94 or newer. Add the published crate to the applicatio
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.9"
+qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -85,10 +85,10 @@ Awaiting each task handle observes the blocking, CPU, and IO results without blo
 
 ## Core Workflow
 
-1. **Create the facade.** Start with `ExecutionServices::builder()`, enable the required domains, and call `runtime(handle)` only when enabling a Tokio domain. `ExecutionServices::new(runtime_handle)` remains a four-domain convenience constructor.
+1. **Create the facade.** Start with `ExecutionServices::builder()` and explicitly enable each required domain. Call `runtime(handle)` only when enabling `tokio_blocking` or `io`; blocking-only and CPU-only configurations do not need a Tokio runtime. At least one domain must be enabled before `build()` succeeds.
 2. **Route work by behavior.** Use `submit_blocking*` for synchronous tasks that may wait on blocking APIs, `submit_cpu*` for CPU-heavy synchronous work, `submit_tokio_blocking*` for blocking work integrated with Tokio, and `spawn_io` for async futures.
 3. **Choose how to observe work.** `submit_*` runnable methods return after acceptance and do not return a result handle. Callable methods return a task handle for the result. `submit_tracked_*` methods return tracked tasks when status or cancellation is needed.
-4. **Stop accepting work and wait.** `shutdown()` requests graceful shutdown across enabled domains. Then await `await_termination()` before releasing application resources that those tasks may use. The wait returns `()` after all enabled domains terminate.
+4. **Stop accepting work and wait.** First stop application components that can produce more tasks and wait for them to exit. Then `shutdown()` requests graceful shutdown across enabled domains. Await `await_termination()` before releasing resources used by tasks or stopping the supplied Tokio runtime. The wait returns `()` after all enabled domains terminate.
 
 Submission itself can fail, so propagate or handle its `Result` at the call site. Accepted work can also finish with an error; inspect the task handle result when the task outcome matters.
 
@@ -99,6 +99,8 @@ Submission itself can fail, so propagate or handle its `Result` at the call site
 The default blocking queue holds up to 1024 waiting tasks; running tasks are outside this queue limit. When a bounded queue is full, the pool can start another worker if it has not reached `blocking_maximum_pool_size`. If it cannot add a worker, a new blocking submission is rejected with `SubmissionError::Saturated`. Set `blocking_queue_capacity(n)` to choose another finite limit, or call `blocking_unbounded_queue()` explicitly to restore unbounded queueing. Choose a limit based on expected task sizes and submission rates; this queue limit does not cap task memory.
 
 By default, both the core and maximum blocking worker counts equal the detected CPU parallelism. Long blocking calls can occupy every worker. The pool does not grow while the bounded queue still has room, so this default limits concurrency rather than adapting to a backlog. Choose `blocking_core_pool_size`, `blocking_maximum_pool_size`, and a finite `blocking_queue_capacity` from the expected simultaneous blocking work and acceptable backlog. A full bounded queue lets the pool add workers up to the maximum; an unbounded queue keeps queueing after the core size is reached and does not trigger burst workers.
+
+The CPU pool also defaults to the detected CPU parallelism, independently of the blocking pool. Enabling both therefore creates two pools with their own workers; Tokio may create additional scheduler and blocking workers under the application runtime's configuration. These are per-domain defaults, not a process-wide thread or memory budget. The blocking queue defaults to 1024 waiting tasks, and CPU, Tokio blocking, and IO each default to 1024 accepted unfinished tasks. These capacities count tasks rather than their memory footprint. Select thread counts and capacities from the workload's peak concurrency and apply back pressure when submissions approach the chosen limits.
 
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 
@@ -150,6 +152,10 @@ The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed
 `await_termination()` uses asynchronous notifications for enabled domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
+
+### Application shutdown order
+
+The facade coordinates only its enabled execution domains. It does not know which application components can submit work or which external resources their tasks use. Stop those producers first and wait until they have exited; then call `services.shutdown()` and await `services.await_termination()`. Keep the supplied Tokio runtime running through that wait, and release resources used by accepted tasks only after termination. The [application shutdown example](../examples/application_shutdown.rs) shows this sequence with a producer and two domains. `stop()` cancels queued work where the underlying executor supports it, but cannot forcibly interrupt synchronous work that has already started.
 
 Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain or its specific controls can depend directly on the corresponding executor crate. In the current `rust-common` checkout, `rs-task` runs its local engine on Tokio and `rs-event-bus` leaves future polling to its caller; neither is a production consumer of this facade. The application consumer fixture verifies the public API boundary, not production adoption.
 
