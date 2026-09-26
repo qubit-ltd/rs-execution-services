@@ -14,6 +14,7 @@ mod execution_domain;
 mod execution_services;
 mod execution_services_build_error;
 mod execution_services_builder;
+mod execution_services_snapshot;
 mod execution_services_stop_report;
 mod execution_services_submission_error;
 
@@ -21,5 +22,6 @@ pub use execution_domain::ExecutionDomain;
 pub use execution_services::ExecutionServices;
 pub use execution_services_build_error::ExecutionServicesBuildError;
 pub use execution_services_builder::ExecutionServicesBuilder;
+pub use execution_services_snapshot::ExecutionServicesSnapshot;
 pub use execution_services_stop_report::ExecutionServicesStopReport;
 pub use execution_services_submission_error::ExecutionServicesSubmissionError;
