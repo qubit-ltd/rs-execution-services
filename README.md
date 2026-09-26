@@ -21,7 +21,7 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 
 ## Quick Start
 
-An application can submit a synchronous blocking operation, a CPU calculation, and an async task through one facade, then wait for their results and shut down all domains:
+An application can submit a synchronous blocking operation, a CPU calculation, and an async task through one facade, then wait for their results and shut down the enabled domains:
 
 ```rust
 // =============================================================================
@@ -39,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .runtime(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_io()
             .blocking_pool_size(4)
             .blocking_queue_capacity(1024)
             .cpu_threads(4)
@@ -65,14 +69,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## What It Provides
 
-- Separate blocking, CPU-bound, Tokio blocking, and Tokio async execution domains.
+- Optional blocking, CPU-bound, Tokio blocking, and Tokio async execution domains.
 - A builder for managed pools and finite capacities for Tokio blocking and IO work; Tokio runtime and scheduler settings remain application-owned.
 - Runnable submissions, result-bearing callable submissions, and tracked task variants.
 - Aggregate lifecycle operations, graceful shutdown, abrupt stop, and per-domain stop counts.
 
 The blocking pool has configurable worker and queue limits; the CPU and Tokio domains bound accepted unfinished work. The user guide explains the defaults, capacity errors, cancellation, and shutdown behavior.
 
-The facade coordinates submission and lifecycle operations across the four domains. Its stop report summarizes per-domain observations; see the user guide for concurrency and count semantics.
+The facade coordinates submission and lifecycle operations across the enabled domains. Its stop report contains optional per-domain observations and exposes no cross-domain totals.
 
 Use this facade when an application needs one owner to submit work to several execution domains and coordinate their shutdown. A component that needs only one domain or its specific controls can depend directly on that executor crate.
 

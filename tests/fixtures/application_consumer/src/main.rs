@@ -16,7 +16,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .enable_all()
         .build()?;
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .enable_all(runtime.handle().clone())
             .blocking_pool_size(2)
             .blocking_queue_capacity(2)
             .cpu_threads(2)

@@ -6,7 +6,7 @@ This guide is for Rust application developers using `qubit-execution-services` 0
 
 ## Conceptual Model
 
-`ExecutionServices` owns four execution domains:
+`ExecutionServices` can own any non-empty subset of four execution domains:
 
 | Domain | Work | Implementation and boundary |
 | --- | --- | --- |
@@ -25,7 +25,7 @@ The example below uses small computations so the return values are easy to verif
 
 ## Installation and Minimal Configuration
 
-The crate requires Rust 1.94 or newer. Add the published crate and Tokio to the application. The Tokio runtime must be available before building the facade:
+The crate requires Rust 1.94 or newer. Add the published crate to the application. Add Tokio when using either Tokio-backed domain; provide its runtime handle only when enabling those domains:
 
 ```toml
 [dependencies]
@@ -35,7 +35,7 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 
 When building this repository from source, first run `./.infra/tools/prepare-local-path-dependencies.sh` from the crate root. It prepares the adjacent `rs-thread-pool`, `rs-rayon-executor`, and `rs-tokio-executor` checkouts used by the development manifest. An application using the published crate does not need these sibling repositories. Publishing requires the matching `qubit-thread-pool` version to be available in the registry.
 
-For an application with a Tokio runtime, pass its handle to the builder and submit work to the appropriate domain:
+Enable only the domains the application uses. This example selects blocking, CPU, and IO; Tokio blocking remains disabled:
 
 ```rust
 // =============================================================================
@@ -53,7 +53,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .runtime(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_io()
             .blocking_pool_size(4)
             .blocking_queue_capacity(1024)
             .cpu_threads(4)
@@ -81,10 +85,10 @@ Here `get()` observes the blocking and CPU callable results, while awaiting the 
 
 ## Core Workflow
 
-1. **Create the facade.** Call `ExecutionServices::builder(runtime_handle)` and configure the managed blocking and CPU pools as needed. `ExecutionServices::new(runtime_handle)` uses builder defaults.
+1. **Create the facade.** Start with `ExecutionServices::builder()`, enable the required domains, and call `runtime(handle)` only when enabling a Tokio domain. `ExecutionServices::new(runtime_handle)` remains a four-domain convenience constructor.
 2. **Route work by behavior.** Use `submit_blocking*` for synchronous tasks that may wait on blocking APIs, `submit_cpu*` for CPU-heavy synchronous work, `submit_tokio_blocking*` for blocking work integrated with Tokio, and `spawn_io` for async futures.
 3. **Choose how to observe work.** `submit_*` runnable methods return after acceptance and do not return a result handle. Callable methods return a task handle for the result. `submit_tracked_*` methods return tracked tasks when status or cancellation is needed.
-4. **Stop accepting work and wait.** `shutdown()` requests graceful shutdown across all domains. Then await `await_termination()` before releasing application resources that those tasks may use. The wait returns `()` after all domains terminate.
+4. **Stop accepting work and wait.** `shutdown()` requests graceful shutdown across enabled domains. Then await `await_termination()` before releasing application resources that those tasks may use. The wait returns `()` after all enabled domains terminate.
 
 Submission itself can fail, so propagate or handle its `Result` at the call site. Accepted work can also finish with an error; inspect the task handle result when the task outcome matters.
 
@@ -99,10 +103,29 @@ By default, both the core and maximum blocking worker counts equal the detected 
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 
 ```rust
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
+let services = ExecutionServices::builder()
+    .enable_blocking()
     .blocking_core_pool_size(4)
     .blocking_maximum_pool_size(8)
     .blocking_queue_capacity(128)
+    .build()?;
+```
+
+For a blocking and CPU-only application, omit the Tokio runtime entirely:
+
+```rust
+let services = ExecutionServices::builder()
+    .enable_blocking()
+    .enable_cpu()
+    .build()?;
+```
+
+For an IO-only application, provide a runtime and enable only IO:
+
+```rust
+let services = ExecutionServices::builder()
+    .runtime(tokio::runtime::Handle::current())
+    .enable_io()
     .build()?;
 ```
 
@@ -118,13 +141,13 @@ The Tokio blocking and IO domains each default to 1024 accepted tasks that have 
 
 ### Tokio runtime ownership
 
-The builder passes the supplied `tokio::runtime::Handle` to both Tokio-backed domains and configures their accepted-task capacities. Configure Tokio's runtime and scheduler in the application that creates the runtime. The facade owns the domains and does not expose direct domain accessors, so submissions pass through the facade-wide shutdown gate.
+The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. A submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`; a domain rejection is returned as `ExecutionServicesSubmissionError::Rejected`.
 
 ### Graceful shutdown and abrupt stop
 
-`shutdown()` and `stop()` first record facade intent to close admission, then request the corresponding operation from each domain. A submission that has already passed the admission check may overlap per-domain shutdown or stop; its underlying domain decides whether to accept or reject it. After either operation returns, all four domains reject new facade submissions. `shutdown()` asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport` with one `StopReport` per domain. Its `total_queued()`, `total_running()`, and `total_cancelled()` methods add the corresponding fields from those reports. Each domain is sampled in sequence, so these totals are not an atomic snapshot across all domains. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Treat these values as per-domain stop accounting, not a global concurrency measurement.
+`shutdown()` and `stop()` first record facade intent to close admission, then request the corresponding operation from each enabled domain. A submission that has already passed the admission check may overlap per-domain shutdown or stop; its underlying domain decides whether to accept or reject it. After either operation returns, enabled domains reject new facade submissions. `shutdown()` asks accepted work to complete according to the underlying service's behavior. `stop()` requests abrupt stopping and returns an `ExecutionServicesStopReport`; each field is `Some(StopReport)` for an enabled domain and `None` for a disabled domain. The report has no cross-domain totals. Domains are sampled in sequence. The Tokio IO `running` field counts accepted futures that had not completed when stop was requested; it does not say whether a future was being polled at that instant. Interpret counts according to each domain's stop contract.
 
-`await_termination()` uses asynchronous notifications for all four domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
+`await_termination()` uses asynchronous notifications for enabled domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
 
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
 
@@ -132,10 +155,10 @@ Use the facade when an application needs one owner to submit work to and close s
 
 ## Errors and Diagnostics
 
-- `ExecutionServicesBuilder::build()` returns `ExecutionServicesBuildError::Blocking` when the blocking builder rejects its configuration, or `ExecutionServicesBuildError::Cpu` when the CPU builder rejects its configuration. The error retains the underlying builder error as its source.
-- Submission methods return `SubmissionError` when a domain refuses work. The CPU and Tokio domains report a full configured capacity as `SubmissionError::Saturated`. After shutdown or stop intent is recorded, submissions that reach the facade admission check return `SubmissionError::Shutdown` before domain capacity is checked. A submission that already passed that check may still be rejected by its underlying domain with `SubmissionError::Saturated`.
+- `ExecutionServicesBuilder::build()` returns `NoDomains` when no domain is enabled, `MissingTokioRuntime` when a Tokio domain lacks a runtime, or a `Blocking`/`Cpu` error when the corresponding enabled builder rejects its configuration.
+- Submission methods return `ExecutionServicesSubmissionError::DomainDisabled` for a disabled domain. Rejections from the facade gate or an enabled domain are wrapped in `ExecutionServicesSubmissionError::Rejected`, which retains the underlying `SubmissionError` such as `Shutdown` or `Saturated`.
 - Once accepted, the task's result is obtained through its handle. A task's own error value is distinct from a submission error; inspect both layers rather than treating successful submission as successful completion.
-- For aggregate shutdown diagnostics, inspect the per-domain fields of `ExecutionServicesStopReport` before relying only on totals.
+- Inspect each enabled domain's `Option<StopReport>` directly; there are no aggregate totals.
 
 ## Troubleshooting
 

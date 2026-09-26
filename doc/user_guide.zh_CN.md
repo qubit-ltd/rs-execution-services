@@ -10,7 +10,7 @@
 
 ## 概念模型
 
-`ExecutionServices` 持有四个执行域：
+`ExecutionServices` 可持有以下四个执行域中的任意非空子集：
 
 | 执行域 | 适用工作 | 实现与配置边界 |
 | --- | --- | --- |
@@ -39,7 +39,7 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 
 从源码开发本仓库时，先在 crate 根目录运行 `./.infra/tools/prepare-local-path-dependencies.sh`。该脚本会准备开发清单所用的相邻 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码目录。应用依赖已发布的 crate 时不需要这些同级仓库；发布本 crate 前，registry 中必须已有清单所声明的 `qubit-thread-pool` 版本。
 
-已有 Tokio runtime 的异步应用可以把当前 runtime 的 handle 交给 builder，再按任务类型提交工作：
+只启用应用需要的执行域。下面的例子选择 blocking、CPU 和 IO；Tokio blocking 未启用：
 
 ```rust
 // =============================================================================
@@ -57,7 +57,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .runtime(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_io()
             .blocking_pool_size(4)
             .blocking_queue_capacity(1024)
             .cpu_threads(4)
@@ -85,10 +89,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 核心工作流
 
-1. **创建 facade。** 调用 `ExecutionServices::builder(runtime_handle)`，按需调整由本 crate 管理的 blocking 和 CPU 线程池。`ExecutionServices::new(runtime_handle)` 使用默认 builder 配置。
+1. **创建 facade。** 从 `ExecutionServices::builder()` 开始，显式启用所需执行域；仅启用 Tokio 域时才调用 `runtime(handle)`。`ExecutionServices::new(runtime_handle)` 仍是启用四域的快捷构造。
 2. **按任务特点路由。** 可能等待阻塞 API 的同步工作使用 `submit_blocking*`；CPU 密集型同步工作使用 `submit_cpu*`；需要接入 Tokio 的阻塞函数使用 `submit_tokio_blocking*`；异步 future 使用 `spawn_io`。
 3. **选择结果观察方式。** `submit_*` runnable 方法只返回是否接收任务，不提供结果 handle。callable 方法返回可读取任务结果的 handle。需要查询状态或取消任务时，使用 `submit_tracked_*` 变体。
-4. **停止接收任务并等待退出。** `shutdown()` 对所有执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。四个域均终止后，该方法返回 `()`。
+4. **停止接收任务并等待退出。** `shutdown()` 对已启用执行域请求有序关闭。之后等待 `await_termination()` 完成，再释放仍可能被任务使用的应用资源。所有已启用域终止后，该方法返回 `()`。
 
 提交操作本身可能失败，应在调用处处理或向上传递其 `Result`。任务被接收后仍可能以错误结束；需要确认任务结果时，应检查 handle。
 
@@ -103,10 +107,29 @@ blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不�
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
 ```rust
-let services = ExecutionServices::builder(tokio::runtime::Handle::current())
+let services = ExecutionServices::builder()
+    .enable_blocking()
     .blocking_core_pool_size(4)
     .blocking_maximum_pool_size(8)
     .blocking_queue_capacity(128)
+    .build()?;
+```
+
+纯 blocking 和 CPU 应用无需提供 Tokio runtime：
+
+```rust
+let services = ExecutionServices::builder()
+    .enable_blocking()
+    .enable_cpu()
+    .build()?;
+```
+
+纯 IO 应用只需提供 runtime 并启用 IO 域：
+
+```rust
+let services = ExecutionServices::builder()
+    .runtime(tokio::runtime::Handle::current())
+    .enable_io()
     .build()?;
 ```
 
@@ -122,13 +145,13 @@ Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务�
 
 ### Tokio runtime 的归属
 
-builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域，并配置其任务准入容量。runtime 和调度器参数由创建 runtime 的应用配置。facade 持有执行域且不暴露直接访问器，因此提交统一经过 facade 级关闭准入门。
+builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。提交到未启用域会返回 `ExecutionServicesSubmissionError::DomainDisabled`；底层域拒绝任务时会返回 `ExecutionServicesSubmissionError::Rejected`。
 
 ### 有序关闭与强制停止
 
-`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后对各执行域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，四个执行域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`，其中每个执行域都有一个 `StopReport`。`total_queued()`、`total_running()` 和 `total_cancelled()` 分别对各报告对应字段求和。各执行域依次取样，因此总数不是所有执行域同一时刻的原子快照。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应将这些值用于各域停止情况的记账，不应视为全局并发度。
+`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后只对已启用域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，已启用域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`：启用域字段为 `Some(StopReport)`，未启用域字段为 `None`。报告不提供跨域总数，各域依次取样。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应按各域的停止契约解释计数。
 
-`await_termination()` 通过异步通知等待四个执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
+`await_termination()` 通过异步通知等待已启用执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
 
 还可以通过 `lifecycle()`、`is_running()`、`is_shutting_down()`、`is_stopping()`、`is_not_running()` 与 `is_terminated()` 查询 facade 的总体生命周期。
 
@@ -136,10 +159,10 @@ builder 把传入的 `tokio::runtime::Handle` 同时交给两个 Tokio 执行域
 
 ## 错误与诊断
 
-- `ExecutionServicesBuilder::build()` 可能返回 `ExecutionServicesBuildError::Blocking` 或 `ExecutionServicesBuildError::Cpu`，分别表示 blocking 或 CPU builder 拒绝了配置。错误会保留底层 builder 错误作为来源。
-- 提交方法通过 `SubmissionError` 报告执行域拒绝任务的情况。CPU 和 Tokio 域达到配置容量时返回 `SubmissionError::Saturated`；记录 shutdown 或 stop 意图后，到达 facade 准入检查的新提交会优先返回 `SubmissionError::Shutdown`，然后才会检查执行域容量。已经通过准入检查的重叠提交仍可能被底层执行域以 `SubmissionError::Saturated` 拒绝。
+- `ExecutionServicesBuilder::build()` 在没有启用域时返回 `NoDomains`；启用 Tokio 域却未设置 runtime 时返回 `MissingTokioRuntime`；启用的 blocking 或 CPU builder 配置无效时返回对应错误。
+- 提交未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。facade 关闭或已启用域拒绝任务时返回 `ExecutionServicesSubmissionError::Rejected`，其中保留底层 `SubmissionError`，例如 `Shutdown` 或 `Saturated`。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
-- 汇总关闭情况时，先检查 `ExecutionServicesStopReport` 的各域字段，再按需要读取总数。
+- 检查关闭结果时，读取 `ExecutionServicesStopReport` 中各启用域的 `Option<StopReport>`；该类型不提供跨域总数。
 
 ## 排障
 
