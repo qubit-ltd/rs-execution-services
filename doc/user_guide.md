@@ -68,8 +68,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
         let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.get()?, 42);
-        assert_eq!(cpu.get()?, 55);
+        assert_eq!(blocking.await?, 42);
+        assert_eq!(cpu.await?, 55);
         assert_eq!(io.await?, 42);
 
         services.shutdown();
@@ -81,7 +81,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-Here `get()` observes the blocking and CPU callable results, while awaiting the Tokio task handles observes the Tokio blocking or async result. Each callable or future returns `Result<R, E>`; the handle reports task completion separately from whether submission was accepted.
+Awaiting each task handle observes the blocking, CPU, and IO results without blocking the current Tokio worker. `TaskHandle::get()` blocks the calling thread and is intended for synchronous contexts. Each callable or future returns `Result<R, E>`; the handle reports task completion separately from whether submission was accepted.
 
 ## Core Workflow
 
