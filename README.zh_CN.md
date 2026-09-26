@@ -54,8 +54,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
         let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.get()?, 42);
-        assert_eq!(cpu.get()?, 55);
+        assert_eq!(blocking.await?, 42);
+        assert_eq!(cpu.await?, 55);
         assert_eq!(io.await?, 42);
 
         services.shutdown();
@@ -66,6 +66,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+这里通过 `.await` 等待任务，让 Tokio 工作线程继续推进调度。`TaskHandle::get()` 会阻塞调用线程，只应在同步代码中使用。
 
 ## 能力与边界
 

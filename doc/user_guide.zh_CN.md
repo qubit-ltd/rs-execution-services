@@ -72,8 +72,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
         let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.get()?, 42);
-        assert_eq!(cpu.get()?, 55);
+        assert_eq!(blocking.await?, 42);
+        assert_eq!(cpu.await?, 55);
         assert_eq!(io.await?, 42);
 
         services.shutdown();
@@ -85,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`get()` 用于取得 blocking 与 CPU callable 的结果；Tokio blocking 或异步任务返回的 handle 则通过 `.await` 取得结果。每个 callable 或 future 都返回 `Result<R, E>`。提交是否成功由提交方法的返回值表示，任务执行结果由 handle 表示。
+通过 `.await` 等待每个任务 handle，可以在不阻塞当前 Tokio 工作线程的情况下取得 blocking、CPU 和 IO 结果。`TaskHandle::get()` 会阻塞调用线程，适合在同步上下文中使用。每个 callable 或 future 都返回 `Result<R, E>`。提交是否成功由提交方法的返回值表示，任务执行结果由 handle 表示。
 
 ## 核心工作流
 
