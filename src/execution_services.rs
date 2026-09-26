@@ -21,6 +21,7 @@ use qubit_tokio_executor::TokioIoExecutorService;
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
 use super::ExecutionDomain;
 use super::ExecutionServicesBuilder;
+use super::ExecutionServicesSnapshot;
 
 /// Unified facade exposing separate execution domains through one owner.
 ///
@@ -92,6 +93,20 @@ impl ExecutionServices {
             ExecutionDomain::Cpu => self.cpu.is_some(),
             ExecutionDomain::TokioBlocking => self.tokio_blocking.is_some(),
             ExecutionDomain::Io => self.io.is_some(),
+        }
+    }
+
+    /// Returns an independent best-effort snapshot of each enabled domain.
+    ///
+    /// The domain snapshots are not simultaneous and are intended for
+    /// monitoring, not admission or synchronization decisions.
+    #[must_use]
+    pub fn snapshot(&self) -> ExecutionServicesSnapshot {
+        ExecutionServicesSnapshot {
+            blocking: self.blocking.as_deref().map(ThreadPool::stats),
+            cpu: self.cpu.as_ref().map(RayonExecutorService::stats),
+            tokio_blocking: self.tokio_blocking.as_ref().map(TokioExecutorService::stats),
+            io: self.io.as_ref().map(TokioIoExecutorService::stats),
         }
     }
 
