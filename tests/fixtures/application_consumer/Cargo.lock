@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-execution-services"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "qubit-executor",
  "qubit-function",

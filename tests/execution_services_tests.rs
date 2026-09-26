@@ -41,7 +41,11 @@ fn create_runtime() -> Runtime {
 fn test_execution_services_submit_blocking_and_cpu_tasks() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -69,7 +73,11 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
 fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .cpu_task_capacity(2)
@@ -110,7 +118,11 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
 fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -166,7 +178,11 @@ fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
 fn test_execution_services_reports_shutdown_while_task_is_running() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -209,7 +225,11 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
     let runtime = create_runtime();
     let services = Arc::new(
         ExecutionServices::builder()
-            .enable_all(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_tokio_blocking()
+            .enable_io()
+            .runtime(runtime.handle().clone())
             .blocking_pool_size(1)
             .blocking_queue_capacity(1)
             .cpu_threads(1)
@@ -265,7 +285,11 @@ fn test_closed_facade_rejected_task_drop_may_request_stop() {
     let runtime = create_runtime();
     let services = Arc::new(
         ExecutionServices::builder()
-            .enable_all(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_tokio_blocking()
+            .enable_io()
+            .runtime(runtime.handle().clone())
             .blocking_pool_size(1)
             .cpu_threads(1)
             .build()
@@ -301,7 +325,11 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
         .build()
         .expect("runtime should build");
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -355,7 +383,11 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
         .build()
         .expect("runtime should build");
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -407,7 +439,11 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
         .build()
         .expect("runtime should build");
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -438,7 +474,14 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
 
 #[tokio_test]
 async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
-    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
+        .build()
+        .expect("execution services should be created");
 
     let blocking = services
         .submit_tokio_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))
@@ -460,7 +503,14 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
 
 #[tokio_test]
 async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
-    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
+        .build()
+        .expect("execution services should be created");
     let (sender, receiver) = mpsc::channel();
 
     assert!(services.is_running());
@@ -500,7 +550,11 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
 #[tokio_test]
 async fn test_execution_services_stop_aggregates_reports() {
     let services = ExecutionServices::builder()
-        .enable_all(Handle::current())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
         .blocking_pool_size(1)
         .blocking_queue_capacity(1)
         .cpu_threads(1)
@@ -594,7 +648,14 @@ async fn test_execution_services_stop_aggregates_reports() {
 
 #[tokio_test]
 async fn test_execution_services_shutdown_rejects_new_tasks() {
-    let services = ExecutionServices::new(Handle::current()).expect("execution services should be created");
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
+        .build()
+        .expect("execution services should be created");
 
     services.shutdown();
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
@@ -612,7 +673,11 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
 #[tokio_test]
 async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() {
     let services = ExecutionServices::builder()
-        .enable_all(Handle::current())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -649,7 +714,11 @@ async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() 
 #[tokio_test]
 async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutdown() {
     let services = ExecutionServices::builder()
-        .enable_all(Handle::current())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -687,7 +756,11 @@ async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutd
 #[tokio_test]
 async fn test_execution_services_stop_intent_survives_shutdown() {
     let services = ExecutionServices::builder()
-        .enable_all(Handle::current())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -727,7 +800,11 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
     for _ in 0..8 {
         let services = Arc::new(
             ExecutionServices::builder()
-                .enable_all(runtime.handle().clone())
+                .enable_blocking()
+                .enable_cpu()
+                .enable_tokio_blocking()
+                .enable_io()
+                .runtime(runtime.handle().clone())
                 .blocking_pool_size(1)
                 .cpu_threads(1)
                 .build()

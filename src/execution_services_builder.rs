@@ -48,7 +48,11 @@ const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
 ///     .enable_all()
 ///     .build()?;
 /// let services = ExecutionServices::builder()
-///     .enable_all(runtime.handle().clone())
+///     .enable_blocking()
+///     .enable_cpu()
+///     .enable_tokio_blocking()
+///     .enable_io()
+///     .runtime(runtime.handle().clone())
 ///     .blocking_pool_size(1)
 ///     .cpu_threads(1)
 ///     .build()?;
@@ -111,16 +115,6 @@ impl ExecutionServicesBuilder {
             io_task_capacity: NonZeroUsize::new(DEFAULT_TOKIO_TASK_CAPACITY)
                 .expect("default Tokio task capacity should be nonzero"),
         }
-    }
-
-    /// Enables all four execution domains and sets their shared Tokio runtime.
-    pub fn enable_all(mut self, runtime: Handle) -> Self {
-        self.runtime = Some(runtime);
-        self.blocking_enabled = true;
-        self.cpu_enabled = true;
-        self.tokio_blocking_enabled = true;
-        self.io_enabled = true;
-        self
     }
 
     /// Enables the managed blocking execution domain.
