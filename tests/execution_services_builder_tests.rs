@@ -35,7 +35,11 @@ fn create_runtime() -> Runtime {
 fn test_execution_services_builder_debug_does_not_expose_configuration() {
     let runtime = create_runtime();
     let builder = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_thread_name_prefix("private-thread-prefix")
         .cpu_threads(1);
 
@@ -143,7 +147,11 @@ fn test_facade_shutdown_error_precedes_disabled_domain_error() {
 fn test_execution_services_builder_rejects_invalid_blocking_domain() {
     let runtime = create_runtime();
     let error = match ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_maximum_pool_size(0)
         .build()
     {
@@ -158,7 +166,11 @@ fn test_execution_services_builder_rejects_invalid_blocking_domain() {
 fn test_execution_services_builder_rejects_invalid_cpu_domain() {
     let runtime = create_runtime();
     let error = match ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .cpu_threads(0)
         .build()
     {
@@ -173,7 +185,11 @@ fn test_execution_services_builder_rejects_invalid_cpu_domain() {
 fn test_execution_services_builder_options_and_accessors() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_core_pool_size(1)
         .blocking_maximum_pool_size(1)
         .blocking_queue_capacity(8)
@@ -211,7 +227,11 @@ fn test_execution_services_builder_options_and_accessors() {
 fn test_execution_services_builder_default_blocking_queue_is_bounded() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -252,7 +272,11 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
 fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_pool_size(1)
         .blocking_unbounded_queue()
         .cpu_threads(1)
@@ -287,7 +311,11 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
 #[tokio_test]
 async fn test_execution_services_builder_configures_independent_tokio_capacities() {
     let services = ExecutionServices::builder()
-        .enable_all(Handle::current())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(Handle::current())
         .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .io_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .build()
@@ -337,7 +365,11 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
 fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills() {
     let runtime = create_runtime();
     let services = ExecutionServices::builder()
-        .enable_all(runtime.handle().clone())
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime.handle().clone())
         .blocking_core_pool_size(1)
         .blocking_maximum_pool_size(2)
         .blocking_queue_capacity(1)

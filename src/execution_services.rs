@@ -26,11 +26,9 @@ use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 use qubit_tokio_executor::TokioTaskHandle;
 use tokio::join;
-use tokio::runtime::Handle;
 
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
 use super::ExecutionDomain;
-use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
 use super::ExecutionServicesSubmissionError;
@@ -70,7 +68,11 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 ///     .enable_all()
 ///     .build()?;
 /// let services = ExecutionServices::builder()
-///     .enable_all(runtime.handle().clone())
+///     .enable_blocking()
+///     .enable_cpu()
+///     .enable_tokio_blocking()
+///     .enable_io()
+///     .runtime(runtime.handle().clone())
 ///     .blocking_pool_size(1)
 ///     .cpu_threads(1)
 ///     .build()?;
@@ -93,26 +95,6 @@ pub struct ExecutionServices {
 }
 
 impl ExecutionServices {
-    /// Creates an execution-services facade with default builder settings.
-    ///
-    /// # Parameters
-    ///
-    /// * `runtime` - Tokio runtime handle used by the blocking and IO domains.
-    ///
-    /// # Returns
-    ///
-    /// `Ok(ExecutionServices)` if the default blocking and CPU domains build
-    /// successfully.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ExecutionServicesBuildError`] if the default builder
-    /// configuration is rejected.
-    #[inline]
-    pub fn new(runtime: Handle) -> Result<Self, ExecutionServicesBuildError> {
-        Self::builder().enable_all(runtime).build()
-    }
-
     /// Creates an empty builder for selecting execution domains.
     #[inline]
     pub fn builder() -> ExecutionServicesBuilder {
