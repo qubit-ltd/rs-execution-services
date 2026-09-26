@@ -165,6 +165,12 @@ Three limits describe different resources. `tokio_blocking_task_capacity` counts
 
 For a complete configuration that separates pool sizes from task capacities, see the runnable [resource budget example](../examples/resource_budget.rs). Its numeric values illustrate the builder options and are not recommended limits for every application.
 
+### Waiting for capacity and monitoring
+
+The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods wait for a capacity or lifecycle event and then retry. Capacity notifications are advisory rather than reservations, so competing producers can make a retry saturate again. Their `make` factories can therefore run more than once and must not perform external side effects. Cancelling the wait future stops further attempts; after acceptance, use the returned task handle to control the task.
+
+`snapshot()` gathers optional stats from enabled domains. It is a collection of independent samples: the fields do not share one instant and must not be summed or used to synchronize submissions. For the IO domain, `accepted_unfinished` includes accepted futures that have not yet been polled. `ThreadPoolStats::queue_capacity` reports the configured queue limit, with `None` for an unbounded queue.
+
 ### Tokio runtime ownership
 
 The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. A submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`; a domain rejection is returned as `ExecutionServicesSubmissionError::Rejected`.
@@ -185,7 +191,7 @@ Use the facade when an application needs one owner to submit work to and close s
 
 ## Errors and Diagnostics
 
-- `ExecutionServicesBuilder::build()` returns `NoDomains` when no domain is enabled, `MissingTokioRuntime` when a Tokio domain lacks a runtime, or a `Blocking`/`Cpu` error when the corresponding enabled builder rejects its configuration.
+- `ExecutionServicesBuilder::build()` returns `NoDomains` when no domain is enabled, `ConfigurationForDisabledDomain` when options were supplied for a disabled domain, `MissingTokioRuntime` when an enabled Tokio domain lacks a runtime, or a `Blocking`/`Cpu` error when the corresponding enabled builder rejects its configuration.
 - Submission methods return `ExecutionServicesSubmissionError::DomainDisabled` for a disabled domain. Rejections from the facade gate or an enabled domain are wrapped in `ExecutionServicesSubmissionError::Rejected`, which retains the underlying `SubmissionError` such as `Shutdown` or `Saturated`.
 - Once accepted, the task's result is obtained through its handle. A task's own error value is distinct from a submission error; inspect both layers rather than treating successful submission as successful completion.
 - Inspect each enabled domain's `Option<StopReport>` directly; there are no aggregate totals.

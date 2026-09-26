@@ -171,6 +171,12 @@ Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务�
 
 如需查看同时配置池大小与任务容量的完整示例，请参阅可运行的[资源预算示例](../examples/resource_budget.rs)。示例数值仅用于说明 builder 用法，并非所有应用都适用的推荐上限。
 
+### 等待容量与监控
+
+立即提交方法在执行域无法接收更多任务时返回 `SubmissionError::Saturated`。`submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 和 `spawn_io_wait` 会等待容量或生命周期事件，然后重试。容量通知不预留名额；多个生产者竞争时，重试仍可能遇到满额。`make` 工厂可能被调用多次，因此不能产生外部副作用。取消等待 future 会停止后续尝试；任务被接收后，通过返回的任务句柄控制它。
+
+`snapshot()` 汇集已启用执行域的可选统计。各字段独立采样，不对应同一时刻，不能相加或用于同步提交。IO 域的 `accepted_unfinished` 包括已接收但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 表示配置的队列上限；无界队列为 `None`。
+
 ### Tokio runtime 的归属
 
 builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。提交到未启用域会返回 `ExecutionServicesSubmissionError::DomainDisabled`；底层域拒绝任务时会返回 `ExecutionServicesSubmissionError::Rejected`。
@@ -191,7 +197,7 @@ facade 只协调已启用的执行域，不知道哪些业务组件还会提交�
 
 ## 错误与诊断
 
-- `ExecutionServicesBuilder::build()` 在没有启用域时返回 `NoDomains`；启用 Tokio 域却未设置 runtime 时返回 `MissingTokioRuntime`；启用的 blocking 或 CPU builder 配置无效时返回对应错误。
+- `ExecutionServicesBuilder::build()` 在没有启用域时返回 `NoDomains`；对未启用域设置配置时返回 `ConfigurationForDisabledDomain`；启用 Tokio 域却未设置 runtime 时返回 `MissingTokioRuntime`；启用的 blocking 或 CPU builder 配置无效时返回对应错误。
 - 提交未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。facade 关闭或已启用域拒绝任务时返回 `ExecutionServicesSubmissionError::Rejected`，其中保留底层 `SubmissionError`，例如 `Shutdown` 或 `Saturated`。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
 - 检查关闭结果时，读取 `ExecutionServicesStopReport` 中各启用域的 `Option<StopReport>`；该类型不提供跨域总数。

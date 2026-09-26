@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .enable_tokio_blocking()
             .tokio_blocking_task_capacity(NonZeroUsize::new(8).expect("nonzero capacity"))
             .enable_io()
-            .io_task_capacity(NonZeroUsize::new(64).expect("nonzero capacity"))
+            .io_task_capacity(NonZeroUsize::new(1).expect("nonzero capacity"))
             .build()?;
 
         let blocking = services.submit_blocking_callable(|| Ok::<u8, io::Error>(40))?;
@@ -43,6 +43,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         assert_eq!(cpu.await?, 41);
         assert_eq!(tokio_blocking.await?, 42);
         assert_eq!(io.await?, 43);
+
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let first_io = services.spawn_io(async move {
+            release_rx.await.map_err(io::Error::other)?;
+            Ok::<u8, io::Error>(44)
+        })?;
+        tokio::task::yield_now().await;
+        let waiting_io = services.spawn_io_wait(|| async { Ok::<u8, io::Error>(45) });
+        tokio::task::yield_now().await;
+        release_tx.send(()).expect("IO producer should be released");
+        assert_eq!(first_io.await?, 44);
+        assert_eq!(waiting_io.await?.await?, 45);
+        let snapshot = services.snapshot();
+        assert_eq!(snapshot.io.expect("IO domain enabled").accepted_unfinished, 0);
 
         services.shutdown();
         services.await_termination().await;
