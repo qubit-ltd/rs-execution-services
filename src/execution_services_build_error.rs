@@ -11,6 +11,8 @@ use qubit_executor::service::ExecutorServiceBuilderError;
 use qubit_rayon_executor::RayonExecutorServiceBuildError;
 use thiserror::Error;
 
+use crate::ExecutionDomain;
+
 /// Error returned when [`super::ExecutionServicesBuilder`] cannot build the
 /// facade.
 ///
@@ -32,6 +34,13 @@ pub enum ExecutionServicesBuildError {
     /// No execution domains were enabled in the builder.
     #[error("at least one execution domain must be enabled")]
     NoDomains,
+
+    /// A domain-specific option was set for a domain that was not enabled.
+    #[error("configuration supplied for disabled execution domain {domain:?}")]
+    ConfigurationForDisabledDomain {
+        /// Domain configured without being enabled.
+        domain: ExecutionDomain,
+    },
 
     /// A Tokio-backed execution domain was enabled without a runtime handle.
     #[error("a Tokio runtime handle is required for the enabled Tokio domains")]

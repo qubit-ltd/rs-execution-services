@@ -76,15 +76,98 @@ fn test_execution_services_builder_requires_a_domain_and_tokio_runtime_only_for_
 }
 
 #[test]
-fn test_disabled_cpu_configuration_does_not_build_a_cpu_pool() {
-    let services = ExecutionServices::builder()
-        .enable_blocking()
-        .cpu_threads(0)
+fn test_disabled_cpu_configuration_is_rejected() {
+    assert!(matches!(
+        ExecutionServices::builder().enable_blocking().cpu_threads(0).build(),
+        Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+            domain: ExecutionDomain::Cpu,
+        })
+    ));
+}
+
+#[test]
+fn test_configuration_for_disabled_domains_uses_stable_domain_order() {
+    let error = match ExecutionServices::builder()
+        .enable_cpu()
+        .blocking_pool_size(1)
+        .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity is nonzero"))
         .build()
-        .expect("invalid settings for a disabled CPU domain should be ignored");
-    assert!(!services.has_domain(ExecutionDomain::Cpu));
-    services.shutdown();
-    assert!(services.is_terminated());
+    {
+        Err(error) => error,
+        Ok(_) => panic!("explicit settings for disabled domains should be rejected"),
+    };
+    assert!(matches!(
+        error,
+        ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+            domain: ExecutionDomain::Blocking,
+        }
+    ));
+}
+
+#[test]
+fn test_every_blocking_option_marks_the_domain_as_configured() {
+    let builders = [
+        ExecutionServices::builder().blocking_pool_size(1),
+        ExecutionServices::builder().blocking_core_pool_size(1),
+        ExecutionServices::builder().blocking_maximum_pool_size(1),
+        ExecutionServices::builder().blocking_queue_capacity(1),
+        ExecutionServices::builder().blocking_unbounded_queue(),
+        ExecutionServices::builder().blocking_thread_name_prefix("worker"),
+        ExecutionServices::builder().blocking_stack_size(1024),
+        ExecutionServices::builder().blocking_keep_alive(Duration::from_secs(1)),
+        ExecutionServices::builder().blocking_allow_core_thread_timeout(false),
+        ExecutionServices::builder().blocking_prestart_core_threads(),
+    ];
+    for builder in builders {
+        assert!(matches!(
+            builder.enable_cpu().build(),
+            Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+                domain: ExecutionDomain::Blocking,
+            })
+        ));
+    }
+}
+
+#[test]
+fn test_every_cpu_option_marks_the_domain_as_configured() {
+    let builders = [
+        ExecutionServices::builder().cpu_threads(1),
+        ExecutionServices::builder().cpu_task_capacity(1),
+        ExecutionServices::builder().cpu_thread_name_prefix("worker"),
+        ExecutionServices::builder().cpu_stack_size(1024),
+    ];
+    for builder in builders {
+        assert!(matches!(
+            builder.enable_blocking().build(),
+            Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+                domain: ExecutionDomain::Cpu,
+            })
+        ));
+    }
+}
+
+#[test]
+fn test_every_tokio_option_marks_its_domain_as_configured() {
+    let capacity = NonZeroUsize::new(1).expect("capacity is nonzero");
+    assert!(matches!(
+        ExecutionServices::builder()
+            .enable_blocking()
+            .tokio_blocking_task_capacity(capacity)
+            .build(),
+        Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+            domain: ExecutionDomain::TokioBlocking,
+        })
+    ));
+
+    assert!(matches!(
+        ExecutionServices::builder()
+            .enable_blocking()
+            .io_task_capacity(capacity)
+            .build(),
+        Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain {
+            domain: ExecutionDomain::Io,
+        })
+    ));
 }
 
 #[test]
