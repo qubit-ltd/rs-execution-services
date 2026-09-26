@@ -152,7 +152,12 @@ impl ExecutionServicesBuilder {
         self
     }
 
-    /// Sets the maximum accepted unfinished tasks in the Tokio blocking domain.
+    /// Sets the maximum number of accepted, unfinished Tokio blocking tasks.
+    ///
+    /// This counts queued and running tasks. A cancelled queued task or a
+    /// completed running task releases its slot. A started blocking closure
+    /// cannot be forcibly cancelled. This limit does not reserve threads or
+    /// change the caller runtime's shared blocking-thread limit.
     ///
     /// # Parameters
     ///
@@ -167,7 +172,10 @@ impl ExecutionServicesBuilder {
         self
     }
 
-    /// Sets the maximum accepted unfinished futures in the Tokio IO domain.
+    /// Sets the maximum number of accepted, unfinished async futures.
+    ///
+    /// This includes futures that have not yet been polled. The limit counts
+    /// tasks, not simultaneously polled futures or runtime worker threads.
     ///
     /// # Parameters
     ///
