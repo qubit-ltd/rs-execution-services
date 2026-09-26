@@ -1,0 +1,12 @@
+[package]
+name = "qubit-ioc-application-consumer"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+qubit-ioc = { path = "../../../../rs-ioc", version = "0.1" }
+qubit-execution-services = { path = "../../..", version = "0.10" }
+qubit-event-bus = { path = "../../../../rs-event-bus", version = "0.14" }
+qubit-fs-registry = { path = "../../../../rs-fs-registry", version = "0.7" }
+tokio = { version = "^1.53", features = ["rt-multi-thread", "time"] }
