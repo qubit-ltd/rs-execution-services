@@ -8,6 +8,25 @@
 //! Execution domains exposed by the facade.
 
 /// Identifies one independently configurable execution domain.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionDomain;
+/// use qubit_execution_services::ExecutionServices;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let services = ExecutionServices::builder()
+///     .enable_blocking()
+///     .build()?;
+///
+/// assert!(services.has_domain(ExecutionDomain::Blocking));
+/// assert!(!services.has_domain(ExecutionDomain::Io));
+/// services.shutdown();
+/// assert!(services.is_terminated());
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExecutionDomain {
     /// Managed pool for synchronous tasks that may block OS threads.
