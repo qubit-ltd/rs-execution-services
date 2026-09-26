@@ -82,6 +82,8 @@ The blocking and CPU domains each create a separate pool, while the application 
 
 `tokio_blocking` uses the application's shared Tokio blocking pool. Its task capacity bounds accepted, unfinished tasks; it does not reserve threads or configure a dedicated running-concurrency limit. Actual concurrency also depends on the runtime's shared blocking pool and its other users. See the runnable [resource budget example](examples/resource_budget.rs) for one explicit configuration. Its numbers are illustrative, not universal defaults.
 
+For workload-based domain selection and a step-by-step resource budget, see [Choosing a Domain and Sizing Resources](doc/user_guide.md#choosing-a-domain-and-sizing-resources).
+
 The facade coordinates submission and lifecycle operations across the enabled domains. Its stop report contains optional per-domain observations and exposes no cross-domain totals.
 
 Use this facade when an application needs one owner to submit work to several execution domains and coordinate their shutdown. A component that needs only one domain or its specific controls can depend directly on that executor crate.

@@ -15,7 +15,27 @@ This guide is for Rust application developers using `qubit-execution-services` 0
 | `tokio_blocking` | Blocking functions in a Tokio application | Uses the application's shared Tokio `spawn_blocking` pool; the facade bounds accepted unfinished tasks but reserves no threads. |
 | `io` | `Future` tasks | Tokio's async scheduler; this domain accepts futures that return `Result<R, E>`. |
 
-The facade does not combine these into one scheduler. Choose a domain based on the work: blocking a Tokio worker with synchronous work can delay unrelated futures, while CPU-heavy work belongs in the Rayon domain. `spawn_io` can run any suitable async future; its name describes the domain, not a restriction to filesystem or network IO.
+The facade does not combine these into one scheduler. Choose a domain from the work's blocking and CPU behavior; `spawn_io` accepts any suitable async future, not only filesystem or network IO.
+
+## Choosing a Domain and Sizing Resources
+
+| Workload | Domain | Execution resource | What its limit controls |
+| --- | --- | --- | --- |
+| Synchronous file operation or blocking SDK call that does not need Tokio | `blocking` | Dedicated `ThreadPool` | Pool size bounds running work; queue capacity bounds waiting tasks. |
+| CPU-heavy synchronous work such as image encoding | `cpu` | Dedicated Rayon pool | Task capacity counts all accepted unfinished tasks, including queued and running work. |
+| Blocking function that must use the application's Tokio blocking pool | `tokio_blocking` | Tokio's shared `spawn_blocking` pool | Facade capacity bounds its accepted unfinished tasks; Tokio `max_blocking_threads` bounds shared runtime workers. |
+| Asynchronous socket, HTTP, or other `Future` work | `io` | Application Tokio runtime | IO capacity bounds accepted unfinished futures, including futures not yet polled. |
+
+Use `blocking` for synchronous APIs that can wait on external work. Use `cpu` when the closure mainly consumes processor time. Choose `tokio_blocking` when the blocking operation belongs on the application's Tokio runtime; its worker pool is shared with every other `spawn_blocking` user there. Choose `io` for async futures. A capacity value is a task or queue limit, not automatically a thread, connection, rate, or memory limit.
+
+For a resource budget, write down the enabled domains and account for their limits separately:
+
+1. Count dedicated workers from the blocking maximum and CPU thread count. Their defaults are each based on `available_parallelism()`, so enabling both creates two independent pools.
+2. Add the application's Tokio async workers and `max_blocking_threads`; both settings belong to the application, and the blocking pool is shared with other runtime users.
+3. Set `blocking_queue_capacity` for waiting blocking tasks, and set CPU, Tokio blocking, and IO capacities for accepted unfinished tasks. These defaults are 1024 each; they do not cap task memory.
+4. Decide what producers do when a finite capacity is full. Submissions can return `SubmissionError::Saturated`; apply back pressure or reduce outstanding work before retrying.
+
+The [resource budget example](../examples/resource_budget.rs) uses illustrative values: at most four Tokio blocking threads for the shared runtime, up to four dedicated blocking workers (core size two), two Rayon workers, a 32-task blocking queue, 32 unfinished CPU tasks, eight unfinished Tokio blocking tasks, and 64 unfinished IO futures. These limits control different resources and are not universal recommendations.
 
 ## Scenario: Route Three Kinds of Work
 
@@ -102,7 +122,7 @@ By default, both the core and maximum blocking worker counts equal the detected 
 
 The CPU pool also defaults to the detected CPU parallelism, independently of the blocking pool. Enabling both therefore creates two pools with their own workers; Tokio may create additional scheduler and blocking workers under the application runtime's configuration. These are per-domain defaults, not a process-wide thread or memory budget. The blocking queue defaults to 1024 waiting tasks, and CPU, Tokio blocking, and IO each default to 1024 accepted unfinished tasks. These capacities count tasks rather than their memory footprint. Select thread counts and capacities from the workload's peak concurrency and apply back pressure when submissions approach the chosen limits.
 
-When setting a resource budget, enable only required domains, allocate the blocking and CPU worker counts from the process thread budget, configure Tokio's runtime limits in the application, then size each task capacity for expected work and acceptable backlog. Apply back pressure at producers and keep the supplied runtime alive through shutdown. The runnable [resource budget example](../examples/resource_budget.rs) shows these settings with illustrative values.
+When applying a budget, use the domain table above together with the queue growth behavior and task-capacity rules below. Keep the supplied runtime alive through shutdown and apply back pressure at producers.
 
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 

@@ -11,6 +11,8 @@ use std::num::NonZeroUsize;
 use qubit_execution_services::ExecutionServices;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // These values illustrate separate resource limits; they are not global
+    // thread or memory budgets for an application.
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .max_blocking_threads(4)
