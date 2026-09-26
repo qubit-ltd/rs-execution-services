@@ -15,7 +15,7 @@ Add the crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.9"
+qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
@@ -78,9 +78,13 @@ The handles are awaited so the Tokio worker can continue polling. `TaskHandle::g
 
 The blocking pool has configurable worker and queue limits; the CPU and Tokio domains bound accepted unfinished work. The user guide explains the defaults, capacity errors, cancellation, and shutdown behavior.
 
+The blocking and CPU domains each create a separate pool, while the application configures its Tokio runtime separately. Their defaults are per-domain starting points, not a total process thread or memory budget. The blocking queue defaults to 1024 waiting tasks; CPU and Tokio capacities default to 1024 unfinished tasks. Tune each domain for expected concurrency and apply back pressure before its capacity is reached.
+
 The facade coordinates submission and lifecycle operations across the enabled domains. Its stop report contains optional per-domain observations and exposes no cross-domain totals.
 
 Use this facade when an application needs one owner to submit work to several execution domains and coordinate their shutdown. A component that needs only one domain or its specific controls can depend directly on that executor crate.
+
+For application shutdown, stop components that produce work first, then call `shutdown()` and await `await_termination()` while the Tokio runtime remains active. See the [application shutdown example](examples/application_shutdown.rs) and user guide for the full sequence.
 
 ## Learn More
 
