@@ -8,6 +8,7 @@
 //! Checks that each published quick-start example matches the runnable example.
 
 const QUICK_START: &str = include_str!("../examples/quick_start.rs");
+const RESOURCE_BUDGET: &str = include_str!("../examples/resource_budget.rs");
 const ENGLISH_README: &str = include_str!("../README.md");
 const CHINESE_README: &str = include_str!("../README.zh_CN.md");
 const ENGLISH_GUIDE: &str = include_str!("../doc/user_guide.md");
@@ -46,4 +47,26 @@ fn test_documented_quick_start_examples_match_the_runnable_example() {
             .unwrap_or_else(|| panic!("{path} must contain a closed Rust quick-start block"));
         assert_eq!(actual.trim_end(), expected, "quick-start block in {path} drifted");
     }
+}
+
+#[test]
+fn test_waiting_submission_and_snapshot_contract_is_documented_bilingually() {
+    for (path, markdown) in [
+        ("README.md", ENGLISH_README),
+        ("README.zh_CN.md", CHINESE_README),
+        ("doc/user_guide.md", ENGLISH_GUIDE),
+        ("doc/user_guide.zh_CN.md", CHINESE_GUIDE),
+    ] {
+        assert!(
+            markdown.contains("submit_blocking_callable_wait"),
+            "{path} must mention waiting submission"
+        );
+        assert!(
+            markdown.contains("spawn_io_wait"),
+            "{path} must mention IO waiting submission"
+        );
+        assert!(markdown.contains("snapshot()"), "{path} must explain snapshots");
+    }
+    assert!(RESOURCE_BUDGET.contains("spawn_io_wait"));
+    assert!(RESOURCE_BUDGET.contains("snapshot()"));
 }
