@@ -18,10 +18,7 @@ mod execution_services_stop_report;
 mod execution_services_submission_error;
 
 pub use execution_domain::ExecutionDomain;
-pub use execution_services::BlockingExecutorService;
-pub use execution_services::BlockingExecutorServiceBuilder;
 pub use execution_services::ExecutionServices;
-pub use execution_services::TokioBlockingExecutorService;
 pub use execution_services_build_error::ExecutionServicesBuildError;
 pub use execution_services_builder::ExecutionServicesBuilder;
 pub use execution_services_stop_report::ExecutionServicesStopReport;

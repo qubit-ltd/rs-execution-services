@@ -14,14 +14,14 @@ use std::time::Duration;
 
 use qubit_rayon_executor::RayonExecutorService;
 use qubit_rayon_executor::RayonExecutorServiceBuilder;
+use qubit_thread_pool::ThreadPool;
+use qubit_thread_pool::ThreadPoolBuilder;
+use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 use tokio::runtime::Handle;
 
-use super::BlockingExecutorService;
-use super::BlockingExecutorServiceBuilder;
 use super::ExecutionServices;
 use super::ExecutionServicesBuildError;
-use super::TokioBlockingExecutorService;
 
 /// Maximum number of blocking tasks waiting in the default queue.
 const DEFAULT_BLOCKING_QUEUE_CAPACITY: usize = 1024;
@@ -33,7 +33,7 @@ const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
 /// domains.
 ///
 /// The builder exposes blocking-pool options by delegating to
-/// [`BlockingExecutorServiceBuilder`] and CPU-pool options by delegating to
+/// [`ThreadPoolBuilder`] and CPU-pool options by delegating to
 /// [`RayonExecutorServiceBuilder`]. It also configures finite accepted-task
 /// capacities for the Tokio-backed domains; Tokio runtime settings remain
 /// application-owned.
@@ -75,7 +75,7 @@ pub struct ExecutionServicesBuilder {
     /// Whether the Tokio IO domain is included.
     io_enabled: bool,
     /// Builder for the blocking executor domain.
-    blocking: BlockingExecutorServiceBuilder,
+    blocking: ThreadPoolBuilder,
     /// Builder for the CPU executor domain.
     cpu: RayonExecutorServiceBuilder,
     /// Maximum accepted unfinished tasks in the Tokio blocking domain.
@@ -106,7 +106,7 @@ impl ExecutionServicesBuilder {
             cpu_enabled: false,
             tokio_blocking_enabled: false,
             io_enabled: false,
-            blocking: BlockingExecutorService::builder()
+            blocking: ThreadPool::builder()
                 .pool_size(pool_size)
                 .queue_capacity(DEFAULT_BLOCKING_QUEUE_CAPACITY),
             cpu: RayonExecutorService::builder().num_threads(pool_size),
@@ -406,13 +406,17 @@ impl ExecutionServicesBuilder {
     ///
     /// # Returns
     ///
-    /// `Ok(ExecutionServices)` if the blocking and CPU domains build
-    /// successfully.
+    /// A facade containing exactly the enabled domains when all required
+    /// configurations build successfully.
     ///
     /// # Errors
     ///
-    /// Returns [`ExecutionServicesBuildError`] if either the blocking or CPU
-    /// domain rejects its builder configuration.
+    /// Returns [`ExecutionServicesBuildError::NoDomains`] when no domain is
+    /// enabled, [`ExecutionServicesBuildError::MissingTokioRuntime`] when an
+    /// enabled Tokio domain lacks a runtime,
+    /// [`ExecutionServicesBuildError::Blocking`] for an invalid blocking
+    /// pool, or [`ExecutionServicesBuildError::Cpu`] for an invalid Rayon
+    /// pool.
     pub fn build(self) -> Result<ExecutionServices, ExecutionServicesBuildError> {
         let any_enabled = self.blocking_enabled || self.cpu_enabled || self.tokio_blocking_enabled || self.io_enabled;
         if !any_enabled {
@@ -441,7 +445,7 @@ impl ExecutionServicesBuilder {
         };
         let runtime = self.runtime;
         let tokio_blocking = if self.tokio_blocking_enabled {
-            Some(TokioBlockingExecutorService::with_task_capacity(
+            Some(TokioExecutorService::with_task_capacity(
                 runtime
                     .as_ref()
                     .ok_or(ExecutionServicesBuildError::MissingTokioRuntime)?

@@ -6,29 +6,21 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 mod internal;
+// Coordinates facade-wide shutdown, stop, and termination waits.
 mod lifecycle;
+// Routes submissions to the enabled execution domains.
 mod submission;
 
 use std::sync::Arc;
 
 use qubit_rayon_executor::RayonExecutorService;
 use qubit_thread_pool::ThreadPool;
-use qubit_thread_pool::ThreadPoolBuilder;
 use qubit_tokio_executor::TokioExecutorService;
 use qubit_tokio_executor::TokioIoExecutorService;
 
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
 use super::ExecutionDomain;
 use super::ExecutionServicesBuilder;
-
-/// Default managed service for synchronous tasks that may block an OS thread.
-pub type BlockingExecutorService = ThreadPool;
-
-/// Builder alias for configuring [`BlockingExecutorService`].
-pub type BlockingExecutorServiceBuilder = ThreadPoolBuilder;
-
-/// Tokio-backed blocking executor service routed through `spawn_blocking`.
-pub type TokioBlockingExecutorService = TokioExecutorService;
 
 /// Unified facade exposing separate execution domains through one owner.
 ///
@@ -59,20 +51,15 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// use qubit_execution_services::ExecutionServices;
 ///
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
-/// let runtime = tokio::runtime::Builder::new_current_thread()
-///     .enable_all()
-///     .build()?;
 /// let services = ExecutionServices::builder()
 ///     .enable_blocking()
-///     .enable_cpu()
-///     .enable_tokio_blocking()
-///     .enable_io()
-///     .runtime(runtime.handle().clone())
 ///     .blocking_pool_size(1)
-///     .cpu_threads(1)
 ///     .build()?;
+/// let task = services.submit_blocking_callable(|| Ok::<u8, std::io::Error>(42))?;
+/// assert_eq!(task.get()?, 42);
 /// services.shutdown();
-/// # runtime.block_on(services.await_termination());
+/// let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+/// runtime.block_on(services.await_termination());
 /// # Ok(())
 /// # }
 /// ```
@@ -80,11 +67,11 @@ pub struct ExecutionServices {
     /// Facade-wide gate shared by submissions and shutdown operations.
     admission: ExecutionServicesAdmission,
     /// Managed service for synchronous tasks that may block OS threads.
-    blocking: Option<Arc<BlockingExecutorService>>,
+    blocking: Option<Arc<ThreadPool>>,
     /// Managed service for CPU-bound synchronous tasks.
     cpu: Option<RayonExecutorService>,
     /// Tokio-backed blocking service using `spawn_blocking`.
-    tokio_blocking: Option<TokioBlockingExecutorService>,
+    tokio_blocking: Option<TokioExecutorService>,
     /// Tokio-backed async service for Future-based tasks.
     io: Option<TokioIoExecutorService>,
 }
@@ -98,6 +85,7 @@ impl ExecutionServices {
 
     /// Returns whether the requested execution domain was enabled.
     #[must_use]
+    #[inline]
     pub fn has_domain(&self, domain: ExecutionDomain) -> bool {
         match domain {
             ExecutionDomain::Blocking => self.blocking.is_some(),
@@ -120,9 +108,9 @@ impl ExecutionServices {
     ///
     /// An execution-services facade owning all supplied domains.
     pub(crate) fn from_parts(
-        blocking: Option<BlockingExecutorService>,
+        blocking: Option<ThreadPool>,
         cpu: Option<RayonExecutorService>,
-        tokio_blocking: Option<TokioBlockingExecutorService>,
+        tokio_blocking: Option<TokioExecutorService>,
         io: Option<TokioIoExecutorService>,
     ) -> Self {
         Self {
