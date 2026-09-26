@@ -19,7 +19,27 @@
 | `tokio_blocking` | Tokio 应用中的阻塞函数 | 使用应用的 Tokio 共享 `spawn_blocking` 池；facade 限制已接收但未完成的任务数，不预留线程。 |
 | `io` | `Future` 任务 | 交给 Tokio async scheduler；future 的输出类型为 `Result<R, E>`。 |
 
-这四个域各自调度任务，并不组成单一调度器。同步代码可能等待外部操作时，优先考虑 `blocking`；需要占用处理器进行计算时，使用 `cpu`。`spawn_io` 接受合适的异步 future，并不要求 future 一定在访问文件或网络。
+这四个域各自调度任务，并不组成单一调度器。应根据任务是否阻塞、是否主要消耗 CPU 来选域；`spawn_io` 接受合适的异步 future，不限于文件或网络操作。
+
+## 选择执行域与核算资源
+
+| 工作负载 | 执行域 | 执行资源 | 限制值控制什么 |
+| --- | --- | --- | --- |
+| 不依赖 Tokio 的同步文件操作或阻塞 SDK 调用 | `blocking` | 独立 `ThreadPool` | 线程池大小限制运行中的任务；队列容量限制等待任务。 |
+| 图像编码等 CPU 密集型同步工作 | `cpu` | 独立 Rayon 线程池 | 任务容量统计所有已接收但未完成的任务，包括排队和运行中的任务。 |
+| 必须使用应用 Tokio 阻塞池的阻塞函数 | `tokio_blocking` | Tokio 共享的 `spawn_blocking` 线程池 | facade 容量限制本服务已接收但未完成的任务；Tokio `max_blocking_threads` 限制 runtime 共享 worker 数。 |
+| 异步 socket、HTTP 或其他 `Future` 工作 | `io` | 应用的 Tokio runtime | IO 容量限制已接收但未完成的 future，包括尚未 poll 的 future。 |
+
+会等待外部操作的同步 API 使用 `blocking`；闭包主要消耗处理器时间时使用 `cpu`。当阻塞操作应运行在应用的 Tokio runtime 上时才选 `tokio_blocking`；它的 worker 与同一 runtime 上的其他 `spawn_blocking` 使用者共享。异步 future 使用 `io`。容量表示任务数或队列上限，不自动等于线程、连接、速率或内存限制。
+
+核算资源预算时，逐项列出启用域并分别计算：
+
+1. 根据 blocking 最大线程数和 CPU 线程数计算独立 worker。两者默认值分别基于 `available_parallelism()`；同时启用会创建两组独立线程池。
+2. 加上应用配置的 Tokio async worker 和 `max_blocking_threads`。这两项由应用管理，阻塞线程池还与同一 runtime 的其他用户共享。
+3. 用 `blocking_queue_capacity` 限制等待中的 blocking 任务；为 CPU、Tokio blocking 和 IO 设置已接收但尚未完成的任务容量。这些容量默认各为 1024，但不限制任务占用内存。
+4. 决定生产者在有限容量已满时如何处理。提交可能返回 `SubmissionError::Saturated`；可在生产者处施加背压或减少未完成工作后再重试。
+
+[资源预算示例](../examples/resource_budget.rs)使用演示数值：runtime 共享 Tokio 阻塞池最多四个线程、独立 blocking 池最多四个 worker（核心线程数为 2）、Rayon 池两个 worker、blocking 队列 32 个任务、CPU 未完成任务 32 个、Tokio blocking 未完成任务 8 个、IO 未完成 future 64 个。这些限制作用于不同资源，不构成通用推荐。
 
 ## 贯穿场景：分发三类任务
 
@@ -106,7 +126,7 @@ blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不�
 
 CPU 池也默认使用检测到的 CPU 并行度，且与 blocking 池相互独立。同时启用两者会创建两组 worker；Tokio 还可能按应用 runtime 的设置创建额外的调度线程和阻塞线程。这些都是单域默认值，不是进程总线程数或内存预算。blocking 队列默认容纳 1024 个等待任务；CPU、Tokio blocking 和 IO 域默认各接受最多 1024 个尚未完成的任务。容量统计任务数量，不统计任务占用内存。应依据峰值并发配置线程数和容量，并在提交接近容量时施加背压。
 
-配置资源预算时，先只启用需要的执行域，再根据进程线程预算分别分配 blocking 和 CPU worker；Tokio runtime 的线程限制由应用配置；之后按任务量和可接受积压设置各域容量，并在生产者处施加背压。关闭时要保持传入的 runtime 运行，直到 `await_termination()` 返回。可运行的[资源预算示例](../examples/resource_budget.rs)展示了这些设置，示例数值仅用于说明。
+配置时结合上面的选域表，以及下文的队列扩容行为和任务容量规则。关闭期间应保持传入的 runtime 运行，并在生产者处施加背压。
 
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
