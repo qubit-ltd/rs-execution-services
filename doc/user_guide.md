@@ -12,7 +12,7 @@ This guide is for Rust application developers using `qubit-execution-services` 0
 | --- | --- | --- |
 | `blocking` | Synchronous work that may block an OS thread | `ThreadPool` from `qubit-thread-pool`; its pool and queue are configured by this crate's builder. |
 | `cpu` | CPU-bound synchronous work | Rayon-backed `RayonExecutorService`; this crate can bound accepted unfinished tasks. |
-| `tokio_blocking` | Blocking functions in a Tokio application | Tokio `spawn_blocking`; runtime scheduling and blocking-pool settings belong to the application. |
+| `tokio_blocking` | Blocking functions in a Tokio application | Uses the application's shared Tokio `spawn_blocking` pool; the facade bounds accepted unfinished tasks but reserves no threads. |
 | `io` | `Future` tasks | Tokio's async scheduler; this domain accepts futures that return `Result<R, E>`. |
 
 The facade does not combine these into one scheduler. Choose a domain based on the work: blocking a Tokio worker with synchronous work can delay unrelated futures, while CPU-heavy work belongs in the Rayon domain. `spawn_io` can run any suitable async future; its name describes the domain, not a restriction to filesystem or network IO.
@@ -102,6 +102,8 @@ By default, both the core and maximum blocking worker counts equal the detected 
 
 The CPU pool also defaults to the detected CPU parallelism, independently of the blocking pool. Enabling both therefore creates two pools with their own workers; Tokio may create additional scheduler and blocking workers under the application runtime's configuration. These are per-domain defaults, not a process-wide thread or memory budget. The blocking queue defaults to 1024 waiting tasks, and CPU, Tokio blocking, and IO each default to 1024 accepted unfinished tasks. These capacities count tasks rather than their memory footprint. Select thread counts and capacities from the workload's peak concurrency and apply back pressure when submissions approach the chosen limits.
 
+When setting a resource budget, enable only required domains, allocate the blocking and CPU worker counts from the process thread budget, configure Tokio's runtime limits in the application, then size each task capacity for expected work and acceptable backlog. Apply back pressure at producers and keep the supplied runtime alive through shutdown. The runnable [resource budget example](../examples/resource_budget.rs) shows these settings with illustrative values.
+
 The builder delegates blocking settings to `ThreadPoolBuilder`. `blocking_pool_size(n)` sets both core and maximum size. To let the pool grow under a burst, use a bounded queue with a maximum larger than the core size:
 
 ```rust
@@ -139,7 +141,9 @@ With `blocking_unbounded_queue()`, work continues to queue after the core size i
 
 ### Tokio task capacities
 
-The Tokio blocking and IO domains each default to 1024 accepted tasks that have not completed. This count includes queued and running work; for IO, it also includes futures that Tokio has accepted but has not polled yet. At capacity, submission returns `SubmissionError::Saturated`. Set `tokio_blocking_task_capacity(NonZeroUsize)` or `io_task_capacity(NonZeroUsize)` on the facade builder to choose another finite limit. A completed task releases its slot. Cancelling a queued blocking task or aborting an IO task releases its slot when the underlying task is dropped; a blocking closure that has already started cannot be forcibly stopped and keeps its slot until it returns.
+Three limits describe different resources. `tokio_blocking_task_capacity` counts accepted blocking tasks that have not finished, whether queued or running. The application's Tokio `max_blocking_threads` setting bounds its shared blocking pool, including other `spawn_blocking` users on that runtime; the facade does not reserve any of those threads or configure a dedicated running-concurrency limit. Actual concurrency also depends on the shared pool and its other users. `io_task_capacity` counts accepted futures that have not finished, including futures not yet polled. The task capacities do not report how many tasks are running or polled at a particular time. The Tokio blocking and IO domains each default to 1024 accepted tasks that have not completed. At capacity, submission returns `SubmissionError::Saturated`. Set `tokio_blocking_task_capacity(NonZeroUsize)` or `io_task_capacity(NonZeroUsize)` on the facade builder to choose another finite limit. A completed task releases its slot. Cancelling a queued blocking task or aborting an IO task releases its slot when the underlying task is dropped; a blocking closure that has already started cannot be forcibly stopped and keeps its slot until it returns.
+
+For a complete configuration that separates pool sizes from task capacities, see the runnable [resource budget example](../examples/resource_budget.rs). Its numeric values illustrate the builder options and are not recommended limits for every application.
 
 ### Tokio runtime ownership
 
