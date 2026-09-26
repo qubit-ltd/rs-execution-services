@@ -13,7 +13,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .runtime(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_io()
             .blocking_pool_size(4)
             .blocking_queue_capacity(1024)
             .cpu_threads(4)

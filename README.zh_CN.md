@@ -21,7 +21,7 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 
 ## 快速开始
 
-下面的例子用同一个门面分别执行同步阻塞任务、CPU 计算和异步任务，取得结果后再关闭所有执行域：
+下面的例子用同一个门面分别执行同步阻塞任务、CPU 计算和异步任务，取得结果后再关闭已启用的执行域：
 
 ```rust
 // =============================================================================
@@ -39,7 +39,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
     runtime.block_on(async {
-        let services = ExecutionServices::builder(runtime.handle().clone())
+        let services = ExecutionServices::builder()
+            .runtime(runtime.handle().clone())
+            .enable_blocking()
+            .enable_cpu()
+            .enable_io()
             .blocking_pool_size(4)
             .blocking_queue_capacity(1024)
             .cpu_threads(4)
@@ -65,14 +69,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ## 能力与边界
 
-- 将阻塞、CPU 密集型、Tokio 阻塞和 Tokio 异步任务分配到不同执行域。
+- 按需启用 blocking、CPU、Tokio blocking 和 Tokio async 执行域。
 - 通过 builder 配置受管理线程池，以及 Tokio 阻塞与 IO 域的有限容量；Tokio runtime 及其调度参数由应用管理。
 - 支持无返回值任务、可取得结果的任务，以及可跟踪状态或取消的任务。
-- 统一查询生命周期、发起有序关闭或强制停止，并汇总各执行域的停止计数。
+- 统一查询已启用域的生命周期、发起有序关闭或强制停止，并按域提供停止报告。
 
 blocking 线程池可配置 worker 数量和队列容量；CPU 与 Tokio 执行域会限制已接收但尚未完成的任务数。用户手册详细说明默认值、容量错误、取消和关闭行为。
 
-facade 协调四个执行域的任务提交与生命周期操作。停止报告汇总各执行域的观测值；并发行为和计数口径详见用户手册。
+facade 协调已启用执行域的任务提交与生命周期操作。停止报告按域提供可选观测值，不计算跨域总数。
 
 应用需要统一向多个执行域提交任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 
