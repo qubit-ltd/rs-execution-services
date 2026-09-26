@@ -11,15 +11,31 @@ use qubit_execution_services::ExecutionServicesStopReport;
 use qubit_executor::service::StopReport;
 
 #[test]
-fn test_execution_services_stop_report_totals() {
+fn test_execution_services_stop_report_has_only_per_domain_values() {
     let report = ExecutionServicesStopReport {
-        blocking: StopReport::new(1, 2, 3),
-        cpu: StopReport::new(4, 5, 6),
-        tokio_blocking: StopReport::new(7, 8, 9),
-        io: StopReport::new(10, 11, 12),
+        blocking: Some(StopReport::new(1, 2, 3)),
+        cpu: None,
+        tokio_blocking: None,
+        io: None,
     };
 
-    assert_eq!(report.total_queued(), 22);
-    assert_eq!(report.total_running(), 26);
-    assert_eq!(report.total_cancelled(), 30);
+    assert_eq!(report.blocking, Some(StopReport::new(1, 2, 3)));
+    assert_eq!(report.cpu, None);
+    assert_eq!(report.tokio_blocking, None);
+    assert_eq!(report.io, None);
+}
+
+#[test]
+fn test_execution_services_stop_report_preserves_each_domain_independently() {
+    let report = ExecutionServicesStopReport {
+        blocking: Some(StopReport::new(1, 2, 3)),
+        cpu: Some(StopReport::new(4, 5, 6)),
+        tokio_blocking: Some(StopReport::new(7, 8, 9)),
+        io: Some(StopReport::new(10, 11, 12)),
+    };
+
+    assert_eq!(report.blocking, Some(StopReport::new(1, 2, 3)));
+    assert_eq!(report.cpu, Some(StopReport::new(4, 5, 6)));
+    assert_eq!(report.tokio_blocking, Some(StopReport::new(7, 8, 9)));
+    assert_eq!(report.io, Some(StopReport::new(10, 11, 12)));
 }

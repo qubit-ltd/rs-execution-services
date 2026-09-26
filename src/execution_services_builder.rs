@@ -29,7 +29,8 @@ const DEFAULT_BLOCKING_QUEUE_CAPACITY: usize = 1024;
 /// Maximum unfinished-task capacity for each Tokio-backed domain by default.
 const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
 
-/// Builder for [`ExecutionServices`].
+/// Builder for explicitly selecting and configuring [`ExecutionServices`]
+/// domains.
 ///
 /// The builder exposes blocking-pool options by delegating to
 /// [`BlockingExecutorServiceBuilder`] and CPU-pool options by delegating to
@@ -46,7 +47,8 @@ const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
 /// let runtime = tokio::runtime::Builder::new_current_thread()
 ///     .enable_all()
 ///     .build()?;
-/// let services = ExecutionServices::builder(runtime.handle().clone())
+/// let services = ExecutionServices::builder()
+///     .enable_all(runtime.handle().clone())
 ///     .blocking_pool_size(1)
 ///     .cpu_threads(1)
 ///     .build()?;
@@ -58,8 +60,16 @@ const DEFAULT_TOKIO_TASK_CAPACITY: usize = 1024;
 #[must_use]
 #[derive(Clone)]
 pub struct ExecutionServicesBuilder {
-    /// Tokio runtime used to create the Tokio-backed execution domains.
-    runtime: Handle,
+    /// Optional Tokio runtime used by enabled Tokio-backed domains.
+    runtime: Option<Handle>,
+    /// Whether the blocking domain is included.
+    blocking_enabled: bool,
+    /// Whether the CPU domain is included.
+    cpu_enabled: bool,
+    /// Whether the Tokio blocking domain is included.
+    tokio_blocking_enabled: bool,
+    /// Whether the Tokio IO domain is included.
+    io_enabled: bool,
     /// Builder for the blocking executor domain.
     blocking: BlockingExecutorServiceBuilder,
     /// Builder for the CPU executor domain.
@@ -79,30 +89,19 @@ impl fmt::Debug for ExecutionServicesBuilder {
 }
 
 impl ExecutionServicesBuilder {
-    /// Creates a builder with default blocking and CPU settings.
+    /// Creates an empty builder with default settings for each domain.
     ///
-    /// The supplied Tokio runtime handle is shared by both Tokio-backed
-    /// execution domains created by [`Self::build`].
-    ///
-    /// # Parameters
-    ///
-    /// * `runtime` - Tokio runtime used by the blocking and async IO domains.
-    ///
-    /// # Returns
-    ///
-    /// A builder using the available CPU parallelism for both managed pools
-    /// and a bounded blocking queue with capacity 1024.
-    ///
-    /// The blocking queue capacity limits waiting tasks. When it is full,
-    /// further blocking submissions are rejected with
-    /// [`SubmissionError::Saturated`](qubit_executor::service::SubmissionError::Saturated).
-    /// Use [`Self::blocking_queue_capacity`] to choose another finite capacity
-    /// or [`Self::blocking_unbounded_queue`] to explicitly use an unbounded
-    /// queue.
-    pub fn with_defaults(runtime: Handle) -> Self {
+    /// No domain is enabled initially. A Tokio runtime is required only if a
+    /// Tokio-backed domain is enabled. The default blocking queue and accepted
+    /// task capacities are 1024.
+    pub fn new() -> Self {
         let pool_size = default_pool_size();
         Self {
-            runtime,
+            runtime: None,
+            blocking_enabled: false,
+            cpu_enabled: false,
+            tokio_blocking_enabled: false,
+            io_enabled: false,
             blocking: BlockingExecutorService::builder()
                 .pool_size(pool_size)
                 .queue_capacity(DEFAULT_BLOCKING_QUEUE_CAPACITY),
@@ -112,6 +111,51 @@ impl ExecutionServicesBuilder {
             io_task_capacity: NonZeroUsize::new(DEFAULT_TOKIO_TASK_CAPACITY)
                 .expect("default Tokio task capacity should be nonzero"),
         }
+    }
+
+    /// Enables all four execution domains and sets their shared Tokio runtime.
+    pub fn enable_all(mut self, runtime: Handle) -> Self {
+        self.runtime = Some(runtime);
+        self.blocking_enabled = true;
+        self.cpu_enabled = true;
+        self.tokio_blocking_enabled = true;
+        self.io_enabled = true;
+        self
+    }
+
+    /// Enables the managed blocking execution domain.
+    #[inline]
+    pub fn enable_blocking(mut self) -> Self {
+        self.blocking_enabled = true;
+        self
+    }
+
+    /// Enables the Rayon-backed CPU execution domain.
+    #[inline]
+    pub fn enable_cpu(mut self) -> Self {
+        self.cpu_enabled = true;
+        self
+    }
+
+    /// Enables the Tokio `spawn_blocking` execution domain.
+    #[inline]
+    pub fn enable_tokio_blocking(mut self) -> Self {
+        self.tokio_blocking_enabled = true;
+        self
+    }
+
+    /// Enables the Tokio async IO execution domain.
+    #[inline]
+    pub fn enable_io(mut self) -> Self {
+        self.io_enabled = true;
+        self
+    }
+
+    /// Sets the runtime used by enabled Tokio-backed execution domains.
+    #[inline]
+    pub fn runtime(mut self, runtime: Handle) -> Self {
+        self.runtime = Some(runtime);
+        self
     }
 
     /// Sets the maximum accepted unfinished tasks in the Tokio blocking domain.
@@ -368,18 +412,58 @@ impl ExecutionServicesBuilder {
     /// Returns [`ExecutionServicesBuildError`] if either the blocking or CPU
     /// domain rejects its builder configuration.
     pub fn build(self) -> Result<ExecutionServices, ExecutionServicesBuildError> {
-        let blocking = self
-            .blocking
-            .build()
-            .map_err(|source| ExecutionServicesBuildError::Blocking { source })?;
-        let cpu = self
-            .cpu
-            .build()
-            .map_err(|source| ExecutionServicesBuildError::Cpu { source })?;
-        let tokio_blocking =
-            TokioBlockingExecutorService::with_task_capacity(self.runtime.clone(), self.tokio_blocking_task_capacity);
-        let io = TokioIoExecutorService::with_task_capacity(self.runtime, self.io_task_capacity);
+        let any_enabled = self.blocking_enabled || self.cpu_enabled || self.tokio_blocking_enabled || self.io_enabled;
+        if !any_enabled {
+            return Err(ExecutionServicesBuildError::NoDomains);
+        }
+        if (self.tokio_blocking_enabled || self.io_enabled) && self.runtime.is_none() {
+            return Err(ExecutionServicesBuildError::MissingTokioRuntime);
+        }
+        let blocking = if self.blocking_enabled {
+            Some(
+                self.blocking
+                    .build()
+                    .map_err(|source| ExecutionServicesBuildError::Blocking { source })?,
+            )
+        } else {
+            None
+        };
+        let cpu = if self.cpu_enabled {
+            Some(
+                self.cpu
+                    .build()
+                    .map_err(|source| ExecutionServicesBuildError::Cpu { source })?,
+            )
+        } else {
+            None
+        };
+        let runtime = self.runtime;
+        let tokio_blocking = if self.tokio_blocking_enabled {
+            Some(TokioBlockingExecutorService::with_task_capacity(
+                runtime
+                    .as_ref()
+                    .ok_or(ExecutionServicesBuildError::MissingTokioRuntime)?
+                    .clone(),
+                self.tokio_blocking_task_capacity,
+            ))
+        } else {
+            None
+        };
+        let io = if self.io_enabled {
+            Some(TokioIoExecutorService::with_task_capacity(
+                runtime.ok_or(ExecutionServicesBuildError::MissingTokioRuntime)?,
+                self.io_task_capacity,
+            ))
+        } else {
+            None
+        };
         Ok(ExecutionServices::from_parts(blocking, cpu, tokio_blocking, io))
+    }
+}
+
+impl Default for ExecutionServicesBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

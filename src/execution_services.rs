@@ -29,9 +29,11 @@ use tokio::join;
 use tokio::runtime::Handle;
 
 use self::internal::execution_services_admission::ExecutionServicesAdmission;
+use super::ExecutionDomain;
 use super::ExecutionServicesBuildError;
 use super::ExecutionServicesBuilder;
 use super::ExecutionServicesStopReport;
+use super::ExecutionServicesSubmissionError;
 
 /// Default managed service for synchronous tasks that may block an OS thread.
 pub type BlockingExecutorService = ThreadPool;
@@ -45,7 +47,7 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// Unified facade exposing separate execution domains through one owner.
 ///
 /// The facade does not implement a single scheduling core. Instead it routes
-/// work to one of four dedicated execution domains:
+/// work to any enabled subset of four dedicated execution domains:
 ///
 /// - `blocking`: synchronous tasks that may block an OS thread.
 /// - `cpu`: CPU-bound synchronous tasks backed by Rayon.
@@ -56,7 +58,7 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// The facade releases its admission lock before invoking a domain submission
 /// or dropping a rejected task. A submission that passed admission may overlap
 /// shutdown or stop; its domain decides whether to accept or reject it. Once
-/// either operation returns, all four domains have been closed to new work.
+/// either operation returns, all enabled domains have been closed to new work.
 ///
 /// # Examples
 ///
@@ -67,7 +69,8 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// let runtime = tokio::runtime::Builder::new_current_thread()
 ///     .enable_all()
 ///     .build()?;
-/// let services = ExecutionServices::builder(runtime.handle().clone())
+/// let services = ExecutionServices::builder()
+///     .enable_all(runtime.handle().clone())
 ///     .blocking_pool_size(1)
 ///     .cpu_threads(1)
 ///     .build()?;
@@ -80,13 +83,13 @@ pub struct ExecutionServices {
     /// Facade-wide gate shared by submissions and shutdown operations.
     admission: ExecutionServicesAdmission,
     /// Managed service for synchronous tasks that may block OS threads.
-    blocking: Arc<BlockingExecutorService>,
+    blocking: Option<Arc<BlockingExecutorService>>,
     /// Managed service for CPU-bound synchronous tasks.
-    cpu: RayonExecutorService,
+    cpu: Option<RayonExecutorService>,
     /// Tokio-backed blocking service using `spawn_blocking`.
-    tokio_blocking: TokioBlockingExecutorService,
+    tokio_blocking: Option<TokioBlockingExecutorService>,
     /// Tokio-backed async service for Future-based tasks.
-    io: TokioIoExecutorService,
+    io: Option<TokioIoExecutorService>,
 }
 
 impl ExecutionServices {
@@ -107,24 +110,27 @@ impl ExecutionServices {
     /// configuration is rejected.
     #[inline]
     pub fn new(runtime: Handle) -> Result<Self, ExecutionServicesBuildError> {
-        Self::builder(runtime).build()
+        Self::builder().enable_all(runtime).build()
     }
 
-    /// Creates a builder for configuring the execution-services facade.
-    ///
-    /// # Parameters
-    ///
-    /// * `runtime` - Tokio runtime handle used by the blocking and IO domains.
-    ///
-    /// # Returns
-    ///
-    /// A builder configured with CPU-parallelism defaults.
+    /// Creates an empty builder for selecting execution domains.
     #[inline]
-    pub fn builder(runtime: Handle) -> ExecutionServicesBuilder {
-        ExecutionServicesBuilder::with_defaults(runtime)
+    pub fn builder() -> ExecutionServicesBuilder {
+        ExecutionServicesBuilder::new()
     }
 
-    /// Creates an execution-services facade from its four execution domains.
+    /// Returns whether the requested execution domain was enabled.
+    #[must_use]
+    pub fn has_domain(&self, domain: ExecutionDomain) -> bool {
+        match domain {
+            ExecutionDomain::Blocking => self.blocking.is_some(),
+            ExecutionDomain::Cpu => self.cpu.is_some(),
+            ExecutionDomain::TokioBlocking => self.tokio_blocking.is_some(),
+            ExecutionDomain::Io => self.io.is_some(),
+        }
+    }
+
+    /// Creates an execution-services facade from its enabled execution domains.
     ///
     /// # Parameters
     ///
@@ -137,14 +143,14 @@ impl ExecutionServices {
     ///
     /// An execution-services facade owning all supplied domains.
     pub(crate) fn from_parts(
-        blocking: BlockingExecutorService,
-        cpu: RayonExecutorService,
-        tokio_blocking: TokioBlockingExecutorService,
-        io: TokioIoExecutorService,
+        blocking: Option<BlockingExecutorService>,
+        cpu: Option<RayonExecutorService>,
+        tokio_blocking: Option<TokioBlockingExecutorService>,
+        io: Option<TokioIoExecutorService>,
     ) -> Self {
         Self {
             admission: ExecutionServicesAdmission::new(),
-            blocking: Arc::new(blocking),
+            blocking: blocking.map(Arc::new),
             cpu,
             tokio_blocking,
             io,
@@ -168,14 +174,17 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_blocking<T, E>(&self, task: T) -> Result<(), SubmissionError>
+    pub fn submit_blocking<T, E>(&self, task: T) -> Result<(), ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.blocking.submit(task))
+        self.submit_to(ExecutionDomain::Blocking, self.blocking.as_deref(), |service| {
+            service.submit(task)
+        })
     }
 
     /// Submits a blocking runnable task and returns a tracked handle.
@@ -195,14 +204,17 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tracked_blocking<T, E>(&self, task: T) -> Result<TrackedTask<(), E>, SubmissionError>
+    pub fn submit_tracked_blocking<T, E>(&self, task: T) -> Result<TrackedTask<(), E>, ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.blocking.submit_tracked(task))
+        self.submit_to(ExecutionDomain::Blocking, self.blocking.as_deref(), |service| {
+            service.submit_tracked(task)
+        })
     }
 
     /// Submits a blocking callable task to the blocking domain.
@@ -223,15 +235,21 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_blocking_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_blocking_callable<C, R, E>(
+        &self,
+        task: C,
+    ) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.blocking.submit_callable(task))
+        self.submit_to(ExecutionDomain::Blocking, self.blocking.as_deref(), |service| {
+            service.submit_callable(task)
+        })
     }
 
     /// Submits a blocking callable task and returns a tracked handle.
@@ -252,15 +270,21 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the blocking domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tracked_blocking_callable<C, R, E>(&self, task: C) -> Result<TrackedTask<R, E>, SubmissionError>
+    pub fn submit_tracked_blocking_callable<C, R, E>(
+        &self,
+        task: C,
+    ) -> Result<TrackedTask<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.blocking.submit_tracked_callable(task))
+        self.submit_to(ExecutionDomain::Blocking, self.blocking.as_deref(), |service| {
+            service.submit_tracked_callable(task)
+        })
     }
 
     /// Submits a CPU-bound runnable task to the Rayon domain.
@@ -280,14 +304,15 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_cpu<T, E>(&self, task: T) -> Result<(), SubmissionError>
+    pub fn submit_cpu<T, E>(&self, task: T) -> Result<(), ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.cpu.submit(task))
+        self.submit_to(ExecutionDomain::Cpu, self.cpu.as_ref(), |service| service.submit(task))
     }
 
     /// Submits a CPU-bound runnable task and returns a tracked handle.
@@ -307,14 +332,17 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tracked_cpu<T, E>(&self, task: T) -> Result<RayonTaskHandle<(), E>, SubmissionError>
+    pub fn submit_tracked_cpu<T, E>(&self, task: T) -> Result<RayonTaskHandle<(), E>, ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.cpu.submit_tracked(task))
+        self.submit_to(ExecutionDomain::Cpu, self.cpu.as_ref(), |service| {
+            service.submit_tracked(task)
+        })
     }
 
     /// Submits a CPU-bound callable task to the Rayon domain.
@@ -335,15 +363,18 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_cpu_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_cpu_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.cpu.submit_callable(task))
+        self.submit_to(ExecutionDomain::Cpu, self.cpu.as_ref(), |service| {
+            service.submit_callable(task)
+        })
     }
 
     /// Submits a CPU-bound callable task and returns a tracked handle.
@@ -364,15 +395,21 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the CPU domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tracked_cpu_callable<C, R, E>(&self, task: C) -> Result<RayonTaskHandle<R, E>, SubmissionError>
+    pub fn submit_tracked_cpu_callable<C, R, E>(
+        &self,
+        task: C,
+    ) -> Result<RayonTaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.cpu.submit_tracked_callable(task))
+        self.submit_to(ExecutionDomain::Cpu, self.cpu.as_ref(), |service| {
+            service.submit_tracked_callable(task)
+        })
     }
 
     /// Submits a blocking runnable task to Tokio `spawn_blocking`.
@@ -392,15 +429,19 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
-    /// task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tokio_blocking<T, E>(&self, task: T) -> Result<(), SubmissionError>
+    pub fn submit_tokio_blocking<T, E>(&self, task: T) -> Result<(), ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.tokio_blocking.submit(task))
+        self.submit_to(
+            ExecutionDomain::TokioBlocking,
+            self.tokio_blocking.as_ref(),
+            |service| service.submit(task),
+        )
     }
 
     /// Submits a blocking runnable task to Tokio and returns a tracked handle.
@@ -420,18 +461,22 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
-    /// task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
     pub fn submit_tracked_tokio_blocking<T, E>(
         &self,
         task: T,
-    ) -> Result<TokioBlockingTaskHandle<(), E>, SubmissionError>
+    ) -> Result<TokioBlockingTaskHandle<(), E>, ExecutionServicesSubmissionError>
     where
         T: Runnable<E> + Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.tokio_blocking.submit_tracked(task))
+        self.submit_to(
+            ExecutionDomain::TokioBlocking,
+            self.tokio_blocking.as_ref(),
+            |service| service.submit_tracked(task),
+        )
     }
 
     /// Submits a blocking callable task to Tokio `spawn_blocking`.
@@ -452,16 +497,23 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
-    /// task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn submit_tokio_blocking_callable<C, R, E>(&self, task: C) -> Result<TaskHandle<R, E>, SubmissionError>
+    pub fn submit_tokio_blocking_callable<C, R, E>(
+        &self,
+        task: C,
+    ) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.tokio_blocking.submit_callable(task))
+        self.submit_to(
+            ExecutionDomain::TokioBlocking,
+            self.tokio_blocking.as_ref(),
+            |service| service.submit_callable(task),
+        )
     }
 
     /// Submits a blocking callable task to Tokio and returns a tracked handle.
@@ -482,20 +534,23 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the Tokio blocking domain refuses the
-    /// task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
     pub fn submit_tracked_tokio_blocking_callable<C, R, E>(
         &self,
         task: C,
-    ) -> Result<TokioBlockingTaskHandle<R, E>, SubmissionError>
+    ) -> Result<TokioBlockingTaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         C: Callable<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission
-            .admit(|| self.tokio_blocking.submit_tracked_callable(task))
+        self.submit_to(
+            ExecutionDomain::TokioBlocking,
+            self.tokio_blocking.as_ref(),
+            |service| service.submit_tracked_callable(task),
+        )
     }
 
     /// Spawns an async IO or Future-based task on Tokio's async runtime.
@@ -516,15 +571,29 @@ impl ExecutionServices {
     ///
     /// # Errors
     ///
-    /// Returns [`SubmissionError`] if the Tokio IO domain refuses the task.
+    /// Returns [`ExecutionServicesSubmissionError`] if the domain is disabled
+    /// or refuses the task.
     #[inline]
-    pub fn spawn_io<F, R, E>(&self, future: F) -> Result<TokioTaskHandle<R, E>, SubmissionError>
+    pub fn spawn_io<F, R, E>(&self, future: F) -> Result<TokioTaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
         F: Future<Output = Result<R, E>> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
-        self.admission.admit(|| self.io.spawn(future))
+        self.submit_to(ExecutionDomain::Io, self.io.as_ref(), |service| service.spawn(future))
+    }
+
+    /// Checks facade admission and domain availability before submitting.
+    fn submit_to<S, R>(
+        &self,
+        domain: ExecutionDomain,
+        service: Option<&S>,
+        submit: impl FnOnce(&S) -> Result<R, SubmissionError>,
+    ) -> Result<R, ExecutionServicesSubmissionError> {
+        self.admission.admit(|| match service {
+            Some(service) => submit(service).map_err(Into::into),
+            None => Err(ExecutionServicesSubmissionError::DomainDisabled { domain }),
+        })
     }
 
     /// Requests graceful shutdown for every execution domain.
@@ -532,13 +601,21 @@ impl ExecutionServices {
     /// The facade records the shutdown intent before closing the domains. A
     /// submission that already passed the facade admission check may overlap
     /// domain shutdown and may be accepted or rejected by that domain. When
-    /// this method returns, all four domains reject new submissions.
+    /// this method returns, every enabled domain rejects new submissions.
     pub fn shutdown(&self) {
         self.admission.request_shutdown();
-        self.blocking.shutdown();
-        self.cpu.shutdown();
-        self.tokio_blocking.shutdown();
-        self.io.shutdown();
+        if let Some(service) = &self.blocking {
+            service.shutdown();
+        }
+        if let Some(service) = &self.cpu {
+            service.shutdown();
+        }
+        if let Some(service) = &self.tokio_blocking {
+            service.shutdown();
+        }
+        if let Some(service) = &self.io {
+            service.shutdown();
+        }
     }
 
     /// Requests abrupt stop for every execution domain.
@@ -546,7 +623,7 @@ impl ExecutionServices {
     /// The facade records the stop intent before stopping the domains. A
     /// submission that already passed the facade admission check may overlap
     /// domain shutdown and may be accepted or rejected by that domain. When
-    /// this method returns, all four domains reject new submissions. The
+    /// this method returns, every enabled domain rejects new submissions. The
     /// report samples domains sequentially in facade order.
     ///
     /// # Returns
@@ -556,10 +633,10 @@ impl ExecutionServices {
     pub fn stop(&self) -> ExecutionServicesStopReport {
         self.admission.request_stop();
         ExecutionServicesStopReport {
-            blocking: self.blocking.stop(),
-            cpu: self.cpu.stop(),
-            tokio_blocking: self.tokio_blocking.stop(),
-            io: self.io.stop(),
+            blocking: self.blocking.as_ref().map(|service| service.stop()),
+            cpu: self.cpu.as_ref().map(|service| service.stop()),
+            tokio_blocking: self.tokio_blocking.as_ref().map(|service| service.stop()),
+            io: self.io.as_ref().map(|service| service.stop()),
         }
     }
 
@@ -577,10 +654,10 @@ impl ExecutionServices {
     #[must_use]
     pub fn lifecycle(&self) -> ExecutorServiceLifecycle {
         self.admission.lifecycle([
-            self.blocking.lifecycle(),
-            self.cpu.lifecycle(),
-            self.tokio_blocking.lifecycle(),
-            self.io.lifecycle(),
+            self.blocking.as_ref().map(|service| service.lifecycle()),
+            self.cpu.as_ref().map(|service| service.lifecycle()),
+            self.tokio_blocking.as_ref().map(|service| service.lifecycle()),
+            self.io.as_ref().map(|service| service.lifecycle()),
         ])
     }
 
@@ -655,10 +732,26 @@ impl ExecutionServices {
     /// waits for the domains to finish.
     pub async fn await_termination(&self) {
         join!(
-            self.blocking.await_termination(),
-            self.cpu.await_termination(),
-            self.tokio_blocking.await_termination(),
-            self.io.await_termination(),
+            async {
+                if let Some(service) = &self.blocking {
+                    service.await_termination().await;
+                }
+            },
+            async {
+                if let Some(service) = &self.cpu {
+                    service.await_termination().await;
+                }
+            },
+            async {
+                if let Some(service) = &self.tokio_blocking {
+                    service.await_termination().await;
+                }
+            },
+            async {
+                if let Some(service) = &self.io {
+                    service.await_termination().await;
+                }
+            },
         );
     }
 }

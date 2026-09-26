@@ -20,11 +20,8 @@ use thiserror::Error;
 /// use qubit_execution_services::ExecutionServices;
 /// use qubit_execution_services::ExecutionServicesBuildError;
 ///
-/// let runtime = tokio::runtime::Builder::new_current_thread()
-///     .enable_all()
-///     .build()
-///     .expect("runtime should build");
-/// let result = ExecutionServices::builder(runtime.handle().clone())
+/// let result = ExecutionServices::builder()
+///     .enable_cpu()
 ///     .cpu_threads(0)
 ///     .build();
 /// assert!(matches!(result, Err(ExecutionServicesBuildError::Cpu { .. })));
@@ -32,6 +29,14 @@ use thiserror::Error;
 #[must_use]
 #[derive(Debug, Error)]
 pub enum ExecutionServicesBuildError {
+    /// No execution domains were enabled in the builder.
+    #[error("at least one execution domain must be enabled")]
+    NoDomains,
+
+    /// A Tokio-backed execution domain was enabled without a runtime handle.
+    #[error("a Tokio runtime handle is required for the enabled Tokio domains")]
+    MissingTokioRuntime,
+
     /// The blocking executor-service configuration is invalid.
     #[error("failed to build blocking executor service: {source}")]
     Blocking {

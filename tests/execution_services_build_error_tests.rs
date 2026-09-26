@@ -11,14 +11,12 @@ use std::error::Error;
 
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
-use tokio::runtime::Runtime;
 
 /// Test build error variants expose the underlying builder failure.
 #[test]
 fn test_execution_services_build_error_display_and_source() {
-    let runtime = Runtime::new().expect("runtime should build");
-    let handle = runtime.handle().clone();
-    let blocking_error = match ExecutionServices::builder(handle.clone())
+    let blocking_error = match ExecutionServices::builder()
+        .enable_blocking()
         .blocking_maximum_pool_size(0)
         .build()
     {
@@ -34,7 +32,7 @@ fn test_execution_services_build_error_display_and_source() {
     );
     assert!(blocking_error.source().is_some());
 
-    let cpu_error = match ExecutionServices::builder(handle).cpu_threads(0).build() {
+    let cpu_error = match ExecutionServices::builder().enable_cpu().cpu_threads(0).build() {
         Ok(_) => panic!("invalid cpu thread count should fail"),
         Err(error) => error,
     };

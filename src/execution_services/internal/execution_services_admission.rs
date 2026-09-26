@@ -46,13 +46,13 @@ impl ExecutionServicesAdmission {
     /// Checks facade admission, then calls `submit` without holding the intent
     /// lock. An overlapping shutdown may cause the underlying domain to
     /// reject work.
-    pub fn admit<R>(&self, submit: impl FnOnce() -> Result<R, SubmissionError>) -> Result<R, SubmissionError> {
+    pub fn admit<R, E: From<SubmissionError>>(&self, submit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
         let accepting = {
             let intent = lock_intent(&self.intent);
             *intent == FacadeIntent::Running
         };
         if !accepting {
-            return Err(SubmissionError::Shutdown);
+            return Err(SubmissionError::Shutdown.into());
         }
         submit()
     }
@@ -80,7 +80,7 @@ impl ExecutionServicesAdmission {
 
     /// Returns the aggregate lifecycle for the current intent and domain
     /// states.
-    pub fn lifecycle(&self, states: [ExecutorServiceLifecycle; 4]) -> ExecutorServiceLifecycle {
+    pub fn lifecycle(&self, states: [Option<ExecutorServiceLifecycle>; 4]) -> ExecutorServiceLifecycle {
         aggregate_lifecycle(self.intent(), states)
     }
 }
@@ -90,20 +90,23 @@ impl ExecutionServicesAdmission {
 /// Termination takes precedence once every domain is terminated. Before then,
 /// aggregate intent keeps an explicit stop visible even if individual domains
 /// have already terminated.
-fn aggregate_lifecycle(intent: FacadeIntent, states: [ExecutorServiceLifecycle; 4]) -> ExecutorServiceLifecycle {
+fn aggregate_lifecycle(
+    intent: FacadeIntent,
+    states: [Option<ExecutorServiceLifecycle>; 4],
+) -> ExecutorServiceLifecycle {
     use ExecutorServiceLifecycle::Running;
     use ExecutorServiceLifecycle::ShuttingDown;
     use ExecutorServiceLifecycle::Stopping;
     use ExecutorServiceLifecycle::Terminated;
 
-    if states.iter().all(|state| *state == Terminated) {
+    if states.iter().flatten().all(|state| *state == Terminated) {
         return Terminated;
     }
     match intent {
         FacadeIntent::Stopping => Stopping,
         FacadeIntent::ShuttingDown => ShuttingDown,
-        FacadeIntent::Running if states.contains(&Stopping) => Stopping,
-        FacadeIntent::Running if states.iter().any(|state| *state != Running) => ShuttingDown,
+        FacadeIntent::Running if states.contains(&Some(Stopping)) => Stopping,
+        FacadeIntent::Running if states.iter().flatten().any(|state| *state != Running) => ShuttingDown,
         FacadeIntent::Running => Running,
     }
 }
@@ -129,10 +132,16 @@ mod tests {
         use ExecutorServiceLifecycle::Terminated;
 
         assert_eq!(
-            aggregate_lifecycle(FacadeIntent::Stopping, [Terminated, ShuttingDown, Terminated, Running],),
+            aggregate_lifecycle(
+                FacadeIntent::Stopping,
+                [Some(Terminated), Some(ShuttingDown), Some(Terminated), Some(Running)],
+            ),
             Stopping,
         );
-        assert_eq!(aggregate_lifecycle(FacadeIntent::Stopping, [Terminated; 4]), Terminated,);
+        assert_eq!(
+            aggregate_lifecycle(FacadeIntent::Stopping, [Some(Terminated); 4]),
+            Terminated,
+        );
     }
 
     #[test]
@@ -143,7 +152,10 @@ mod tests {
         use ExecutorServiceLifecycle::Terminated;
 
         assert_eq!(
-            aggregate_lifecycle(FacadeIntent::Running, [Running, Stopping, ShuttingDown, Terminated],),
+            aggregate_lifecycle(
+                FacadeIntent::Running,
+                [Some(Running), Some(Stopping), Some(ShuttingDown), Some(Terminated)],
+            ),
             Stopping,
         );
     }
@@ -154,7 +166,7 @@ mod tests {
         use ExecutorServiceLifecycle::Stopping;
 
         let admission = ExecutionServicesAdmission::new();
-        let accepted = admission.admit(|| Ok(7));
+        let accepted = admission.admit(|| Ok::<_, SubmissionError>(7));
         assert_eq!(accepted, Ok(7));
         assert!(admission.intent() == FacadeIntent::Running);
 
@@ -166,7 +178,7 @@ mod tests {
         assert!(admission.intent() == FacadeIntent::Stopping);
         admission.request_shutdown();
         assert!(admission.intent() == FacadeIntent::Stopping);
-        assert_eq!(admission.lifecycle([Running; 4]), Stopping);
+        assert_eq!(admission.lifecycle([Some(Running); 4]), Stopping);
     }
 
     #[test]
