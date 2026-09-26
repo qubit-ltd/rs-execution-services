@@ -14,6 +14,7 @@ use std::sync::mpsc;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionServices;
+use qubit_execution_services::ExecutionServicesSubmissionError;
 use qubit_executor::CancelResult;
 use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
@@ -39,7 +40,8 @@ fn create_runtime() -> Runtime {
 #[test]
 fn test_execution_services_submit_blocking_and_cpu_tasks() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -66,7 +68,8 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
 #[test]
 fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .cpu_task_capacity(2)
@@ -87,7 +90,9 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
         .expect("queued CPU task should be accepted");
     assert!(matches!(
         services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Saturated)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Saturated
+        })
     ));
     assert_eq!(queued.cancel(), CancelResult::Cancelled);
     queued.get().expect_err("queued task should be cancelled");
@@ -104,7 +109,8 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
 #[test]
 fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -159,7 +165,8 @@ fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
 #[test]
 fn test_execution_services_reports_shutdown_while_task_is_running() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -201,7 +208,8 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
 
     let runtime = create_runtime();
     let services = Arc::new(
-        ExecutionServices::builder(runtime.handle().clone())
+        ExecutionServices::builder()
+            .enable_all(runtime.handle().clone())
             .blocking_pool_size(1)
             .blocking_queue_capacity(1)
             .cpu_threads(1)
@@ -227,7 +235,12 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
         drop(on_drop.take());
         Ok::<(), io::Error>(())
     });
-    assert!(matches!(result, Err(SubmissionError::Saturated)));
+    assert!(matches!(
+        result,
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Saturated
+        })
+    ));
     assert!(services.is_shutting_down());
     release_tx.send(()).expect("release worker");
     runtime.block_on(services.await_termination());
@@ -251,7 +264,8 @@ fn test_closed_facade_rejected_task_drop_may_request_stop() {
 
     let runtime = create_runtime();
     let services = Arc::new(
-        ExecutionServices::builder(runtime.handle().clone())
+        ExecutionServices::builder()
+            .enable_all(runtime.handle().clone())
             .blocking_pool_size(1)
             .cpu_threads(1)
             .build()
@@ -267,7 +281,12 @@ fn test_closed_facade_rejected_task_drop_may_request_stop() {
         drop(on_drop.take());
         Ok::<(), io::Error>(())
     });
-    assert!(matches!(result, Err(SubmissionError::Shutdown)));
+    assert!(matches!(
+        result,
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
+    ));
     assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
     runtime.block_on(services.await_termination());
     assert!(services.is_terminated());
@@ -281,7 +300,8 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
         .enable_all()
         .build()
         .expect("runtime should build");
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -334,7 +354,8 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
         .enable_all()
         .build()
         .expect("runtime should build");
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -385,7 +406,8 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
         .enable_all()
         .build()
         .expect("runtime should build");
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -477,7 +499,8 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
 
 #[tokio_test]
 async fn test_execution_services_stop_aggregates_reports() {
-    let services = ExecutionServices::builder(Handle::current())
+    let services = ExecutionServices::builder()
+        .enable_all(Handle::current())
         .blocking_pool_size(1)
         .blocking_queue_capacity(1)
         .cpu_threads(1)
@@ -537,12 +560,15 @@ async fn test_execution_services_stop_aggregates_reports() {
     let report = services.stop();
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     assert!(services.is_stopping());
-    assert_eq!(report.blocking.queued, 1);
-    assert_eq!(report.blocking.running, 1);
-    assert_eq!(report.blocking.cancelled, 1);
-    assert!(report.tokio_blocking.running >= 1);
-    assert_eq!(report.io.running, 1);
-    assert_eq!(report.io.cancelled, 1);
+    let blocking_report = report.blocking.expect("blocking enabled");
+    let io_report = report.io.expect("IO enabled");
+    let tokio_blocking_report = report.tokio_blocking.expect("Tokio blocking enabled");
+    assert_eq!(blocking_report.queued, 1);
+    assert_eq!(blocking_report.running, 1);
+    assert_eq!(blocking_report.cancelled, 1);
+    assert!(tokio_blocking_report.running >= 1);
+    assert_eq!(io_report.running, 1);
+    assert_eq!(io_report.cancelled, 1);
 
     blocking_release_sender
         .send(())
@@ -552,19 +578,10 @@ async fn test_execution_services_stop_aggregates_reports() {
         .expect("Tokio blocking task release should be sent");
     services.await_termination().await;
 
-    assert_eq!(
-        report.total_queued(),
-        report.blocking.queued + report.cpu.queued + report.tokio_blocking.queued + report.io.queued
-    );
-    assert_eq!(
-        report.total_running(),
-        report.blocking.running + report.cpu.running + report.tokio_blocking.running + report.io.running
-    );
-    assert_eq!(
-        report.total_cancelled(),
-        report.blocking.cancelled + report.cpu.cancelled + report.tokio_blocking.cancelled + report.io.cancelled
-    );
-    assert!(report.total_cancelled() >= 1);
+    let cpu_report = report.cpu.expect("CPU enabled");
+    assert_eq!(cpu_report.queued, 0);
+    assert_eq!(cpu_report.running, 0);
+    assert_eq!(cpu_report.cancelled, 0);
     assert!(services.is_not_running());
     assert!(services.is_terminated());
     running
@@ -582,14 +599,20 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
     services.shutdown();
     let result = services.spawn_io(async { Ok::<(), io::Error>(()) });
 
-    assert!(matches!(result, Err(SubmissionError::Shutdown)));
+    assert!(matches!(
+        result,
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
+    ));
     services.await_termination().await;
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
 #[tokio_test]
 async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() {
-    let services = ExecutionServices::builder(Handle::current())
+    let services = ExecutionServices::builder()
+        .enable_all(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -598,26 +621,35 @@ async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() 
     services.shutdown();
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.submit_cpu(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     services.await_termination().await;
 }
 
 #[tokio_test]
 async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutdown() {
-    let services = ExecutionServices::builder(Handle::current())
+    let services = ExecutionServices::builder()
+        .enable_all(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -627,26 +659,35 @@ async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutd
     services.shutdown();
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.submit_cpu(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
-        Err(SubmissionError::Shutdown)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
     ));
     services.await_termination().await;
 }
 
 #[tokio_test]
 async fn test_execution_services_stop_intent_survives_shutdown() {
-    let services = ExecutionServices::builder(Handle::current())
+    let services = ExecutionServices::builder()
+        .enable_all(Handle::current())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -685,7 +726,8 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
     let runtime = create_runtime();
     for _ in 0..8 {
         let services = Arc::new(
-            ExecutionServices::builder(runtime.handle().clone())
+            ExecutionServices::builder()
+                .enable_all(runtime.handle().clone())
                 .blocking_pool_size(1)
                 .cpu_threads(1)
                 .build()
@@ -715,20 +757,22 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
         workers.push(std::thread::spawn(move || {
             shutdown_barrier.wait();
             shutdown_services.shutdown();
-            Ok::<(), SubmissionError>(())
+            Ok::<(), ExecutionServicesSubmissionError>(())
         }));
         let stop_services = Arc::clone(&services);
         let stop_barrier = Arc::clone(&barrier);
         workers.push(std::thread::spawn(move || {
             stop_barrier.wait();
             let _stop_report = stop_services.stop();
-            Ok::<(), SubmissionError>(())
+            Ok::<(), ExecutionServicesSubmissionError>(())
         }));
 
         for worker in workers {
             match worker.join() {
                 Ok(Ok(())) => {}
-                Ok(Err(SubmissionError::Shutdown)) => {}
+                Ok(Err(ExecutionServicesSubmissionError::Rejected {
+                    source: SubmissionError::Shutdown,
+                })) => {}
                 Ok(Err(error)) => panic!("unexpected concurrent submission error: {error:?}"),
                 Err(_) => panic!("concurrent submission or shutdown worker panicked"),
             }
@@ -736,19 +780,27 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
 
         assert!(matches!(
             services.submit_blocking(|| Ok::<(), io::Error>(())),
-            Err(SubmissionError::Shutdown)
+            Err(ExecutionServicesSubmissionError::Rejected {
+                source: SubmissionError::Shutdown
+            })
         ));
         assert!(matches!(
             services.submit_cpu(|| Ok::<(), io::Error>(())),
-            Err(SubmissionError::Shutdown)
+            Err(ExecutionServicesSubmissionError::Rejected {
+                source: SubmissionError::Shutdown
+            })
         ));
         assert!(matches!(
             services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
-            Err(SubmissionError::Shutdown)
+            Err(ExecutionServicesSubmissionError::Rejected {
+                source: SubmissionError::Shutdown
+            })
         ));
         assert!(matches!(
             services.spawn_io(async { Ok::<(), io::Error>(()) }),
-            Err(SubmissionError::Shutdown)
+            Err(ExecutionServicesSubmissionError::Rejected {
+                source: SubmissionError::Shutdown
+            })
         ));
     }
     drop(runtime);

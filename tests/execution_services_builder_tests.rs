@@ -12,8 +12,10 @@ use std::num::NonZeroUsize;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use qubit_execution_services::ExecutionDomain;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuildError;
+use qubit_execution_services::ExecutionServicesSubmissionError;
 use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
@@ -32,7 +34,8 @@ fn create_runtime() -> Runtime {
 #[test]
 fn test_execution_services_builder_debug_does_not_expose_configuration() {
     let runtime = create_runtime();
-    let builder = ExecutionServices::builder(runtime.handle().clone())
+    let builder = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_thread_name_prefix("private-thread-prefix")
         .cpu_threads(1);
 
@@ -40,9 +43,107 @@ fn test_execution_services_builder_debug_does_not_expose_configuration() {
 }
 
 #[test]
+fn test_execution_services_builder_requires_a_domain_and_tokio_runtime_only_for_tokio_domains() {
+    assert!(matches!(
+        ExecutionServices::builder().build(),
+        Err(ExecutionServicesBuildError::NoDomains)
+    ));
+    assert!(matches!(
+        ExecutionServices::builder().enable_io().build(),
+        Err(ExecutionServicesBuildError::MissingTokioRuntime)
+    ));
+    assert!(matches!(
+        ExecutionServices::builder().enable_tokio_blocking().build(),
+        Err(ExecutionServicesBuildError::MissingTokioRuntime)
+    ));
+
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .enable_cpu()
+        .cpu_threads(1)
+        .build()
+        .expect("blocking and CPU domains should not require a Tokio runtime handle");
+    assert!(services.has_domain(ExecutionDomain::Blocking));
+    assert!(services.has_domain(ExecutionDomain::Cpu));
+    assert!(!services.has_domain(ExecutionDomain::TokioBlocking));
+    assert!(!services.has_domain(ExecutionDomain::Io));
+    services.shutdown();
+    assert!(services.is_terminated());
+}
+
+#[test]
+fn test_disabled_cpu_configuration_does_not_build_a_cpu_pool() {
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .cpu_threads(0)
+        .build()
+        .expect("invalid settings for a disabled CPU domain should be ignored");
+    assert!(!services.has_domain(ExecutionDomain::Cpu));
+    services.shutdown();
+    assert!(services.is_terminated());
+}
+
+#[test]
+fn test_only_io_domain_builds_and_other_domains_report_disabled() {
+    let runtime = create_runtime();
+    let services = ExecutionServices::builder()
+        .runtime(runtime.handle().clone())
+        .enable_io()
+        .build()
+        .expect("IO-only services should build");
+    assert!(services.has_domain(ExecutionDomain::Io));
+
+    assert!(matches!(
+        services.submit_blocking(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::DomainDisabled {
+            domain: ExecutionDomain::Blocking
+        })
+    ));
+    assert!(matches!(
+        services.submit_cpu(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::DomainDisabled {
+            domain: ExecutionDomain::Cpu
+        })
+    ));
+    assert!(matches!(
+        services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::DomainDisabled {
+            domain: ExecutionDomain::TokioBlocking
+        })
+    ));
+
+    let io = services
+        .spawn_io(async { Ok::<usize, io::Error>(42) })
+        .expect("enabled IO domain should accept a future");
+    assert_eq!(runtime.block_on(io).expect("IO task should succeed"), 42);
+    let report = services.stop();
+    assert!(report.blocking.is_none());
+    assert!(report.cpu.is_none());
+    assert!(report.tokio_blocking.is_none());
+    assert!(report.io.is_some());
+    runtime.block_on(services.await_termination());
+}
+
+#[test]
+fn test_facade_shutdown_error_precedes_disabled_domain_error() {
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .build()
+        .expect("blocking-only services should build");
+    services.shutdown();
+    assert!(matches!(
+        services.spawn_io(async { Ok::<(), io::Error>(()) }),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
+    ));
+}
+
+#[test]
 fn test_execution_services_builder_rejects_invalid_blocking_domain() {
     let runtime = create_runtime();
-    let error = match ExecutionServices::builder(runtime.handle().clone())
+    let error = match ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_maximum_pool_size(0)
         .build()
     {
@@ -56,7 +157,8 @@ fn test_execution_services_builder_rejects_invalid_blocking_domain() {
 #[test]
 fn test_execution_services_builder_rejects_invalid_cpu_domain() {
     let runtime = create_runtime();
-    let error = match ExecutionServices::builder(runtime.handle().clone())
+    let error = match ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .cpu_threads(0)
         .build()
     {
@@ -70,7 +172,8 @@ fn test_execution_services_builder_rejects_invalid_cpu_domain() {
 #[test]
 fn test_execution_services_builder_options_and_accessors() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_core_pool_size(1)
         .blocking_maximum_pool_size(1)
         .blocking_queue_capacity(8)
@@ -107,7 +210,8 @@ fn test_execution_services_builder_options_and_accessors() {
 #[test]
 fn test_execution_services_builder_default_blocking_queue_is_bounded() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .cpu_threads(1)
         .build()
@@ -133,11 +237,13 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
     }
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Saturated)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Saturated
+        })
     ));
 
     let report = services.stop();
-    assert_eq!(report.blocking.queued, 1024);
+    assert_eq!(report.blocking.expect("blocking enabled").queued, 1024);
     release_sender.send(()).expect("blocking task release should be sent");
     runtime.block_on(services.await_termination());
 }
@@ -145,7 +251,8 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
 #[test]
 fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_pool_size(1)
         .blocking_unbounded_queue()
         .cpu_threads(1)
@@ -172,14 +279,15 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
     }
 
     let report = services.stop();
-    assert_eq!(report.blocking.queued, 1025);
+    assert_eq!(report.blocking.expect("blocking enabled").queued, 1025);
     release_sender.send(()).expect("blocking task release should be sent");
     runtime.block_on(services.await_termination());
 }
 
 #[tokio_test]
 async fn test_execution_services_builder_configures_independent_tokio_capacities() {
-    let services = ExecutionServices::builder(Handle::current())
+    let services = ExecutionServices::builder()
+        .enable_all(Handle::current())
         .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .io_task_capacity(NonZeroUsize::new(1).expect("capacity should be nonzero"))
         .build()
@@ -199,7 +307,9 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
         .expect("Tokio blocking task should start");
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
-        Err(SubmissionError::Saturated)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Saturated
+        })
     ));
 
     let io = services
@@ -210,11 +320,13 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
         .expect("IO domain should accept one future");
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
-        Err(SubmissionError::Saturated)
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Saturated
+        })
     ));
 
     let report = services.stop();
-    assert_eq!(report.io.cancelled, 1);
+    assert_eq!(report.io.expect("IO enabled").cancelled, 1);
     release_sender.send(()).expect("Tokio blocking task should be released");
     services.await_termination().await;
     blocking.await.expect("running Tokio blocking task should finish");
@@ -224,7 +336,8 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
 #[test]
 fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills() {
     let runtime = create_runtime();
-    let services = ExecutionServices::builder(runtime.handle().clone())
+    let services = ExecutionServices::builder()
+        .enable_all(runtime.handle().clone())
         .blocking_core_pool_size(1)
         .blocking_maximum_pool_size(2)
         .blocking_queue_capacity(1)
