@@ -28,8 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             services.submit_tokio_blocking_callable(|| Ok::<u8, io::Error>(42))?;
         let io = services.spawn_io(async { Ok::<u8, io::Error>(43) })?;
 
-        assert_eq!(blocking.get()?, 40);
-        assert_eq!(cpu.get()?, 41);
+        assert_eq!(blocking.await?, 40);
+        assert_eq!(cpu.await?, 41);
         assert_eq!(tokio_blocking.await?, 42);
         assert_eq!(io.await?, 43);
 
