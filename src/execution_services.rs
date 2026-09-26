@@ -52,6 +52,13 @@ pub type TokioBlockingExecutorService = TokioExecutorService;
 /// - `tokio_blocking`: blocking tasks routed through Tokio `spawn_blocking`.
 /// - `io`: async futures spawned on Tokio's async runtime.
 ///
+/// The `blocking` and `cpu` domains own separate worker pools. Both Tokio
+/// domains use the caller's runtime; `tokio_blocking` uses that runtime's
+/// shared `spawn_blocking` pool. Its task capacity limits accepted, unfinished
+/// tasks; it is not a thread reservation or a setting for execution
+/// concurrency. Enabling multiple domains does not establish a process-wide
+/// resource budget.
+///
 /// Each submission checks facade admission before delegating to its domain.
 /// The facade releases its admission lock before invoking a domain submission
 /// or dropping a rejected task. A submission that passed admission may overlap
