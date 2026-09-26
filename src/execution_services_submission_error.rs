@@ -13,6 +13,33 @@ use thiserror::Error;
 use crate::ExecutionDomain;
 
 /// Error returned when a facade submission cannot be accepted.
+///
+/// # Examples
+///
+/// ```
+/// use qubit_execution_services::ExecutionDomain;
+/// use qubit_execution_services::ExecutionServices;
+/// use qubit_execution_services::ExecutionServicesSubmissionError;
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let services = ExecutionServices::builder()
+///     .enable_blocking()
+///     .build()?;
+/// let result = services.spawn_io(async {
+///     Ok::<(), std::io::Error>(())
+/// });
+///
+/// assert!(matches!(
+///     result,
+///     Err(ExecutionServicesSubmissionError::DomainDisabled {
+///         domain: ExecutionDomain::Io,
+///     })
+/// ));
+/// services.shutdown();
+/// # Ok(())
+/// # }
+/// ```
+#[must_use]
 #[derive(Debug, Clone, Error)]
 pub enum ExecutionServicesSubmissionError {
     /// The requested execution domain was not enabled when the facade was
