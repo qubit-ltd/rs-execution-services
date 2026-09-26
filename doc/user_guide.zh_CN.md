@@ -16,7 +16,7 @@
 | --- | --- | --- |
 | `blocking` | 可能阻塞 OS 线程的同步工作 | 使用 `qubit-thread-pool` 的 `ThreadPool`；线程池和队列由本 crate 的 builder 配置。 |
 | `cpu` | CPU 密集型同步工作 | 使用 Rayon-backed `RayonExecutorService`；本 crate 可限制已接收但未完成的任务数。 |
-| `tokio_blocking` | Tokio 应用中的阻塞函数 | 通过 Tokio `spawn_blocking` 执行；runtime 与 blocking pool 的参数由应用负责。 |
+| `tokio_blocking` | Tokio 应用中的阻塞函数 | 使用应用的 Tokio 共享 `spawn_blocking` 池；facade 限制已接收但未完成的任务数，不预留线程。 |
 | `io` | `Future` 任务 | 交给 Tokio async scheduler；future 的输出类型为 `Result<R, E>`。 |
 
 这四个域各自调度任务，并不组成单一调度器。同步代码可能等待外部操作时，优先考虑 `blocking`；需要占用处理器进行计算时，使用 `cpu`。`spawn_io` 接受合适的异步 future，并不要求 future 一定在访问文件或网络。
@@ -106,6 +106,8 @@ blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不�
 
 CPU 池也默认使用检测到的 CPU 并行度，且与 blocking 池相互独立。同时启用两者会创建两组 worker；Tokio 还可能按应用 runtime 的设置创建额外的调度线程和阻塞线程。这些都是单域默认值，不是进程总线程数或内存预算。blocking 队列默认容纳 1024 个等待任务；CPU、Tokio blocking 和 IO 域默认各接受最多 1024 个尚未完成的任务。容量统计任务数量，不统计任务占用内存。应依据峰值并发配置线程数和容量，并在提交接近容量时施加背压。
 
+配置资源预算时，先只启用需要的执行域，再根据进程线程预算分别分配 blocking 和 CPU worker；Tokio runtime 的线程限制由应用配置；之后按任务量和可接受积压设置各域容量，并在生产者处施加背压。关闭时要保持传入的 runtime 运行，直到 `await_termination()` 返回。可运行的[资源预算示例](../examples/resource_budget.rs)展示了这些设置，示例数值仅用于说明。
+
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
 ```rust
@@ -143,7 +145,11 @@ let services = ExecutionServices::builder()
 
 ### Tokio 任务容量
 
-Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务。计数包括排队和运行中的工作；IO 域还包括已被 Tokio 接收但尚未 poll 的 future。达到容量时，提交返回 `SubmissionError::Saturated`。可在 facade builder 上通过 `tokio_blocking_task_capacity(NonZeroUsize)` 或 `io_task_capacity(NonZeroUsize)` 设置其他有限容量。任务完成后会释放容量。取消排队中的阻塞任务或 abort IO 任务后，底层任务被释放时会归还容量；已经开始运行的阻塞闭包无法被强制停止，会一直占用容量直到返回。
+这里有三个不同的限制：`tokio_blocking_task_capacity` 统计已接收但尚未完成的阻塞任务，无论它们处于排队还是运行状态；应用设置的 Tokio `max_blocking_threads` 限制的是该 runtime 的共享阻塞线程池，同一 runtime 上其他 `spawn_blocking` 调用也使用它，facade 不会预留其中的线程，也不配置专属的运行并发数；实际同时运行数还取决于共享线程池和其他使用者；`io_task_capacity` 统计已接收但尚未完成的 future，包括尚未被 poll 的 future。任务容量不会报告某一时刻实际正在运行或 poll 的任务数。
+
+Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务。达到容量时，提交返回 `SubmissionError::Saturated`。可在 facade builder 上通过 `tokio_blocking_task_capacity(NonZeroUsize)` 或 `io_task_capacity(NonZeroUsize)` 设置其他有限容量。任务完成后会释放容量。取消排队中的阻塞任务或 abort IO 任务后，底层任务被释放时会归还容量；已经开始运行的阻塞闭包无法被强制停止，会一直占用容量直到返回。
+
+如需查看同时配置池大小与任务容量的完整示例，请参阅可运行的[资源预算示例](../examples/resource_budget.rs)。示例数值仅用于说明 builder 用法，并非所有应用都适用的推荐上限。
 
 ### Tokio runtime 的归属
 

@@ -80,6 +80,8 @@ The blocking pool has configurable worker and queue limits; the CPU and Tokio do
 
 The blocking and CPU domains each create a separate pool, while the application configures its Tokio runtime separately. Their defaults are per-domain starting points, not a total process thread or memory budget. The blocking queue defaults to 1024 waiting tasks; CPU and Tokio capacities default to 1024 unfinished tasks. Tune each domain for expected concurrency and apply back pressure before its capacity is reached.
 
+`tokio_blocking` uses the application's shared Tokio blocking pool. Its task capacity bounds accepted, unfinished tasks; it does not reserve threads or configure a dedicated running-concurrency limit. Actual concurrency also depends on the runtime's shared blocking pool and its other users. See the runnable [resource budget example](examples/resource_budget.rs) for one explicit configuration. Its numbers are illustrative, not universal defaults.
+
 The facade coordinates submission and lifecycle operations across the enabled domains. Its stop report contains optional per-domain observations and exposes no cross-domain totals.
 
 Use this facade when an application needs one owner to submit work to several execution domains and coordinate their shutdown. A component that needs only one domain or its specific controls can depend directly on that executor crate.
