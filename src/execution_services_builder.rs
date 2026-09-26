@@ -74,6 +74,14 @@ pub struct ExecutionServicesBuilder {
     tokio_blocking_enabled: bool,
     /// Whether the Tokio IO domain is included.
     io_enabled: bool,
+    /// Whether any blocking-domain option was explicitly configured.
+    blocking_configured: bool,
+    /// Whether any CPU-domain option was explicitly configured.
+    cpu_configured: bool,
+    /// Whether the Tokio blocking capacity was explicitly configured.
+    tokio_blocking_configured: bool,
+    /// Whether the IO capacity was explicitly configured.
+    io_configured: bool,
     /// Builder for the blocking executor domain.
     blocking: ThreadPoolBuilder,
     /// Builder for the CPU executor domain.
@@ -106,6 +114,10 @@ impl ExecutionServicesBuilder {
             cpu_enabled: false,
             tokio_blocking_enabled: false,
             io_enabled: false,
+            blocking_configured: false,
+            cpu_configured: false,
+            tokio_blocking_configured: false,
+            io_configured: false,
             blocking: ThreadPool::builder()
                 .pool_size(pool_size)
                 .queue_capacity(DEFAULT_BLOCKING_QUEUE_CAPACITY),
@@ -168,6 +180,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn tokio_blocking_task_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.tokio_blocking_configured = true;
         self.tokio_blocking_task_capacity = capacity;
         self
     }
@@ -186,6 +199,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn io_task_capacity(mut self, capacity: NonZeroUsize) -> Self {
+        self.io_configured = true;
         self.io_task_capacity = capacity;
         self
     }
@@ -201,6 +215,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_pool_size(mut self, pool_size: usize) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.pool_size(pool_size);
         self
     }
@@ -216,6 +231,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_core_pool_size(mut self, core_pool_size: usize) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.core_pool_size(core_pool_size);
         self
     }
@@ -236,6 +252,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_maximum_pool_size(mut self, maximum_pool_size: usize) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.maximum_pool_size(maximum_pool_size);
         self
     }
@@ -251,6 +268,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_queue_capacity(mut self, capacity: usize) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.queue_capacity(capacity);
         self
     }
@@ -267,6 +285,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_unbounded_queue(mut self) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.unbounded_queue();
         self
     }
@@ -282,6 +301,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_thread_name_prefix(mut self, prefix: &str) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.thread_name_prefix(prefix);
         self
     }
@@ -297,6 +317,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_stack_size(mut self, stack_size: usize) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.stack_size(stack_size);
         self
     }
@@ -312,6 +333,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_keep_alive(mut self, keep_alive: Duration) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.keep_alive(keep_alive);
         self
     }
@@ -327,6 +349,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_allow_core_thread_timeout(mut self, allow: bool) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.allow_core_thread_timeout(allow);
         self
     }
@@ -338,6 +361,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn blocking_prestart_core_threads(mut self) -> Self {
+        self.blocking_configured = true;
         self.blocking = self.blocking.prestart_core_threads();
         self
     }
@@ -353,6 +377,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn cpu_threads(mut self, num_threads: usize) -> Self {
+        self.cpu_configured = true;
         self.cpu = self.cpu.num_threads(num_threads);
         self
     }
@@ -368,6 +393,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn cpu_task_capacity(mut self, capacity: usize) -> Self {
+        self.cpu_configured = true;
         self.cpu = self.cpu.task_capacity(capacity);
         self
     }
@@ -383,6 +409,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn cpu_thread_name_prefix(mut self, prefix: &str) -> Self {
+        self.cpu_configured = true;
         self.cpu = self.cpu.thread_name_prefix(prefix);
         self
     }
@@ -398,6 +425,7 @@ impl ExecutionServicesBuilder {
     /// This builder for fluent configuration.
     #[inline]
     pub fn cpu_stack_size(mut self, stack_size: usize) -> Self {
+        self.cpu_configured = true;
         self.cpu = self.cpu.stack_size(stack_size);
         self
     }
@@ -412,8 +440,10 @@ impl ExecutionServicesBuilder {
     /// # Errors
     ///
     /// Returns [`ExecutionServicesBuildError::NoDomains`] when no domain is
-    /// enabled, [`ExecutionServicesBuildError::MissingTokioRuntime`] when an
-    /// enabled Tokio domain lacks a runtime,
+    /// enabled, [`ExecutionServicesBuildError::ConfigurationForDisabledDomain`]
+    /// when a disabled domain has explicit settings, and
+    /// [`ExecutionServicesBuildError::MissingTokioRuntime`] when an enabled
+    /// Tokio domain lacks a runtime,
     /// [`ExecutionServicesBuildError::Blocking`] for an invalid blocking
     /// pool, or [`ExecutionServicesBuildError::Cpu`] for an invalid Rayon
     /// pool.
@@ -421,6 +451,24 @@ impl ExecutionServicesBuilder {
         let any_enabled = self.blocking_enabled || self.cpu_enabled || self.tokio_blocking_enabled || self.io_enabled;
         if !any_enabled {
             return Err(ExecutionServicesBuildError::NoDomains);
+        }
+        for (configured, enabled, domain) in [
+            (
+                self.blocking_configured,
+                self.blocking_enabled,
+                crate::ExecutionDomain::Blocking,
+            ),
+            (self.cpu_configured, self.cpu_enabled, crate::ExecutionDomain::Cpu),
+            (
+                self.tokio_blocking_configured,
+                self.tokio_blocking_enabled,
+                crate::ExecutionDomain::TokioBlocking,
+            ),
+            (self.io_configured, self.io_enabled, crate::ExecutionDomain::Io),
+        ] {
+            if configured && !enabled {
+                return Err(ExecutionServicesBuildError::ConfigurationForDisabledDomain { domain });
+            }
         }
         if (self.tokio_blocking_enabled || self.io_enabled) && self.runtime.is_none() {
             return Err(ExecutionServicesBuildError::MissingTokioRuntime);
