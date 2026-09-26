@@ -39,10 +39,8 @@ pub struct ExecutionServicesStopReport {
     pub tokio_blocking: Option<StopReport>,
     /// Stop report for the Tokio async IO executor domain.
     ///
-    /// Its `running` field counts accepted futures that had not completed when
-    /// stop was requested; it does not indicate which futures were being
-    /// polled.
-    /// `None` means the domain was not enabled. Its `running` count represents
-    /// accepted futures that had not completed, not futures being polled.
+    /// `None` means this domain was not enabled. The `running` count covers
+    /// accepted futures that had not completed when stop was requested; it does
+    /// not indicate which futures were being polled.
     pub io: Option<StopReport>,
 }
