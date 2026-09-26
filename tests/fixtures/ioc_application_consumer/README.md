@@ -20,10 +20,12 @@ The example registers an `EventBusRegistry` with its local provider, creates an
 the empty registry does not resolve filesystems. `ExecutionServices` receives a
 Tokio runtime handle and executes a small IO task.
 
-Shutdown is explicit: the application shuts down the event bus, requests
-execution service shutdown, then waits for termination while the Tokio runtime
-is still alive. A test also verifies that a missing `EventBusRegistry` is
-reported before its factory runs.
+`EventBus` and `ExecutionServices` are registered as managed components. The
+application calls `ApplicationContext::shutdown_async()` while the Tokio
+runtime is still alive; the context requests stop for all resources before it
+waits for termination. One test verifies that a missing `EventBusRegistry` is
+reported before its factory runs. Another verifies that a later factory
+failure stops a managed resource that was already constructed.
 
 This is a downstream contract fixture, not evidence that a production
 application currently uses this integration.

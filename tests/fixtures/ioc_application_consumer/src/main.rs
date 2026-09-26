@@ -12,31 +12,46 @@ use qubit_ioc::ApplicationContext;
 use qubit_ioc::ContainerBuilder;
 use qubit_ioc::Dependency;
 use qubit_ioc::FactoryError;
+use qubit_ioc::CleanupError;
+use qubit_ioc::Managed;
 use tokio::runtime::Handle;
 
 fn build_application(runtime: Handle) -> Result<ApplicationContext, Box<dyn Error>> {
     let mut builder = ContainerBuilder::new();
     builder.register_instance(Arc::new(runtime))?;
     builder.register_instance(Arc::new(FileSystemRegistry::default()))?;
-    builder.register_factory::<ExecutionServices, _>(&[Dependency::of::<Handle>()], |context| {
+    builder.register_managed_factory::<ExecutionServices, _>(&[Dependency::of::<Handle>()], |context| {
         let runtime = context.get::<Handle>().map_err(FactoryError::new)?;
         let services = ExecutionServices::builder()
             .enable_io()
             .runtime((*runtime).clone())
             .build()
             .map_err(FactoryError::new)?;
-        Ok(Arc::new(services))
+        Ok(Managed::new(Arc::new(services), |services| {
+            services.shutdown();
+            Ok(())
+        })
+        .with_wait(|services| {
+            Box::pin(async move {
+                services.await_termination().await;
+                Ok(())
+            })
+        }))
     })?;
     builder.register_factory::<EventBusRegistry, _>(&[], |_| {
         let registry = EventBusRegistry::with_local().map_err(FactoryError::new)?;
         registry.seal();
         Ok(Arc::new(registry))
     })?;
-    builder.register_factory::<EventBus, _>(&[Dependency::of::<EventBusRegistry>()], |context| {
+    builder.register_managed_factory::<EventBus, _>(&[Dependency::of::<EventBusRegistry>()], |context| {
         let registry = context.get::<EventBusRegistry>().map_err(FactoryError::new)?;
         registry
             .create(&EventBusConfig::default())
-            .map(Arc::new)
+            .map(|bus| {
+                Managed::new(Arc::new(bus), |bus| {
+                    bus.shutdown(ShutdownMode::Immediate).map(|_| ()).map_err(CleanupError::new)
+                })
+            })
             .map_err(FactoryError::new)
     })?;
     builder.root::<ExecutionServices>();
@@ -63,9 +78,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?)?;
     assert_eq!(result, 43);
 
-    bus.shutdown(ShutdownMode::Immediate)?;
-    services.shutdown();
-    runtime.block_on(services.await_termination());
+    runtime.block_on(context.shutdown_async())?;
     assert!(services.is_terminated());
     Ok(())
 }
@@ -77,6 +90,7 @@ mod tests {
     use super::EventBus;
     use super::EventBusRegistry;
     use super::FactoryError;
+    use super::Managed;
     use super::Arc;
     use qubit_ioc::BuildError;
     use std::sync::atomic::AtomicUsize;
@@ -98,5 +112,28 @@ mod tests {
 
         assert!(matches!(builder.build(), Err(BuildError::MissingDependency { .. })));
         assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn test_build_failure_stops_an_already_created_managed_resource() {
+        let stops = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::clone(&stops);
+        let mut builder = ContainerBuilder::new();
+        builder
+            .register_managed_factory::<u8, _>(&[], move |_| {
+                Ok(Managed::new(Arc::new(1), move |_| {
+                    captured.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }))
+            })
+            .expect("register managed resource");
+        builder
+            .register_factory::<u16, _>(&[], |_| Err(FactoryError::new(io::Error::other("expected failure"))))
+            .expect("register failing factory");
+        builder.root::<u16>();
+        builder.root::<u8>();
+
+        assert!(matches!(builder.build(), Err(BuildError::FactoryFailed { .. })));
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
     }
 }
