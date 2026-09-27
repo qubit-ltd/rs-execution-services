@@ -101,13 +101,7 @@ facade 协调已启用执行域的任务提交与生命周期操作。停止报�
 
 ## 开发环境
 
-开发本仓库时，Cargo 使用相邻目录中的 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码。运行 Cargo 命令前，先准备这些本地依赖：
-
-```bash
-./.infra/tools/prepare-local-path-dependencies.sh
-```
-
-应用使用已发布版本时，只需依赖 crates.io 上对应版本。发布本 crate 前，registry 也必须已有清单声明的 `qubit-thread-pool` 版本。
+本仓库根据 `Cargo.toml` 中的版本约束，从 crates.io 解析 `qubit-thread-pool`、`qubit-rayon-executor` 和 `qubit-tokio-executor`。发布本 crate 前，registry 中必须已有清单声明的依赖版本。
 
 检查已提交的锁文件能否原样解析时，请运行 `cargo test --locked` 和 `cargo test --locked --all-features`。
 

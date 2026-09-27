@@ -57,7 +57,7 @@ qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
-从源码开发本仓库时，先在 crate 根目录运行 `./.infra/tools/prepare-local-path-dependencies.sh`。该脚本会准备开发清单所用的相邻 `rs-thread-pool`、`rs-rayon-executor` 和 `rs-tokio-executor` 源码目录。应用依赖已发布的 crate 时不需要这些同级仓库；发布本 crate 前，registry 中必须已有清单所声明的 `qubit-thread-pool` 版本。
+本仓库根据 `Cargo.toml` 中的版本约束，从 crates.io 解析 `qubit-thread-pool`、`qubit-rayon-executor` 和 `qubit-tokio-executor`。发布本 crate 前，registry 中必须已有清单声明的依赖版本。
 
 只启用应用需要的执行域。下面的例子选择 blocking、CPU 和 IO；Tokio blocking 未启用：
 

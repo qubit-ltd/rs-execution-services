@@ -221,7 +221,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-rayon-executor"
-version = "0.8.0"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfaa7d88b21235825d47c73e7dd39951420ff04467ce17b02fe4f63decfe4463"
 dependencies = [
  "parking_lot",
  "qubit-executor",
@@ -243,7 +245,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-thread-pool"
-version = "0.11.0"
+version = "0.11.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e699dc3afe6449a63c6d68d6f559a0b1a2dd53e13b16e14ec874f2ca054d13e3"
 dependencies = [
  "crossbeam-deque",
  "qubit-argument",
@@ -256,7 +260,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-tokio-executor"
-version = "0.10.0"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b8b5e36f65b6507af896ee8a887b4387c5c887f5524e5293e18fa2111a4d8d1"
 dependencies = [
  "parking_lot",
  "qubit-atomic",
