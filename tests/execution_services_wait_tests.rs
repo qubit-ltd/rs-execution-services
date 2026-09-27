@@ -5,8 +5,11 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Tests waiting submission and cancellation across execution domains.
+
 use std::io;
 use std::num::NonZeroUsize;
+use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
@@ -16,9 +19,16 @@ use qubit_execution_services::ExecutionDomain;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesSubmissionError;
 use qubit_executor::service::SubmissionError;
+use tokio::join;
+use tokio::pin;
+use tokio::runtime::Handle;
+use tokio::select;
+use tokio::sync::oneshot;
+use tokio::task::yield_now;
+use tokio::test as tokio_test;
 use tokio::time::timeout;
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
 async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
     let services = ExecutionServices::builder()
         .enable_blocking()
@@ -42,7 +52,7 @@ async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
         calls.fetch_add(1, Ordering::SeqCst);
         || Ok::<usize, io::Error>(42)
     });
-    tokio::pin!(waiting);
+    pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 1);
     release_tx.send(()).unwrap();
@@ -60,7 +70,7 @@ async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
     services.await_termination().await;
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
 async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     // CPU domain.
     let services = ExecutionServices::builder()
@@ -80,7 +90,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let waiting = services.submit_cpu_callable_wait(|| || Ok::<usize, io::Error>(42));
-    tokio::pin!(waiting);
+    pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
     assert_eq!(
@@ -99,7 +109,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     // Tokio blocking domain.
     let services = ExecutionServices::builder()
         .enable_tokio_blocking()
-        .runtime(tokio::runtime::Handle::current())
+        .runtime(Handle::current())
         .tokio_blocking_task_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .unwrap();
@@ -114,7 +124,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let waiting = services.submit_tokio_blocking_callable_wait(|| || Ok::<usize, io::Error>(42));
-    tokio::pin!(waiting);
+    pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
     assert_eq!(
@@ -133,20 +143,20 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     // IO domain.
     let services = ExecutionServices::builder()
         .enable_io()
-        .runtime(tokio::runtime::Handle::current())
+        .runtime(Handle::current())
         .io_task_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .unwrap();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
     let running = services
         .spawn_io(async move {
             release_rx.await.unwrap();
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    tokio::task::yield_now().await;
+    yield_now().await;
     let waiting = services.spawn_io_wait(|| async { Ok::<usize, io::Error>(42) });
-    tokio::pin!(waiting);
+    pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
     assert_eq!(
@@ -163,7 +173,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     services.await_termination().await;
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
     let disabled = ExecutionServices::builder()
         .enable_blocking()
@@ -193,11 +203,11 @@ async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
 
     let services = ExecutionServices::builder()
         .enable_io()
-        .runtime(tokio::runtime::Handle::current())
+        .runtime(Handle::current())
         .io_task_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .unwrap();
-    let (release_tx, _release_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, _release_rx) = oneshot::channel::<()>();
     let _running = services
         .spawn_io(async move {
             std::future::pending::<()>().await;
@@ -205,9 +215,9 @@ async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    tokio::task::yield_now().await;
+    yield_now().await;
     let waiting = services.spawn_io_wait(|| async { Ok::<(), io::Error>(()) });
-    tokio::pin!(waiting);
+    pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     services.shutdown();
     let result = timeout(Duration::from_secs(1), waiting).await.unwrap();
@@ -221,24 +231,24 @@ async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
     services.await_termination().await;
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn cancelling_a_full_capacity_wait_does_not_call_factory_again() {
     let services = ExecutionServices::builder()
         .enable_io()
-        .runtime(tokio::runtime::Handle::current())
+        .runtime(Handle::current())
         .io_task_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .unwrap();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
     let running = services
         .spawn_io(async move {
             release_rx.await.unwrap();
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    tokio::task::yield_now().await;
-    let calls = std::sync::Arc::new(AtomicUsize::new(0));
-    let factory_calls = std::sync::Arc::clone(&calls);
+    yield_now().await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    let factory_calls = Arc::clone(&calls);
     let mut waiting = Box::pin(services.spawn_io_wait(move || {
         factory_calls.fetch_add(1, Ordering::SeqCst);
         async { Ok::<(), io::Error>(()) }
@@ -253,26 +263,26 @@ async fn cancelling_a_full_capacity_wait_does_not_call_factory_again() {
     services.await_termination().await;
 }
 
-#[tokio::test]
+#[tokio_test]
 async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
     let services = ExecutionServices::builder()
         .enable_io()
-        .runtime(tokio::runtime::Handle::current())
+        .runtime(Handle::current())
         .io_task_capacity(NonZeroUsize::new(1).unwrap())
         .build()
         .unwrap();
-    let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+    let (release_tx, release_rx) = oneshot::channel::<()>();
     let running = services
         .spawn_io(async move {
             release_rx.await.unwrap();
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    tokio::task::yield_now().await;
+    yield_now().await;
 
-    let calls = std::sync::Arc::new(AtomicUsize::new(0));
-    let first_calls = std::sync::Arc::clone(&calls);
-    let second_calls = std::sync::Arc::clone(&calls);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let first_calls = Arc::clone(&calls);
+    let second_calls = Arc::clone(&calls);
     let first = services.spawn_io_wait(move || {
         first_calls.fetch_add(1, Ordering::SeqCst);
         async { Ok::<usize, io::Error>(1) }
@@ -281,21 +291,21 @@ async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
         second_calls.fetch_add(1, Ordering::SeqCst);
         async { Ok::<usize, io::Error>(2) }
     });
-    tokio::pin!(first);
-    tokio::pin!(second);
+    pin!(first);
+    pin!(second);
     timeout(Duration::from_secs(1), async {
         while calls.load(Ordering::SeqCst) < 2 {
-            tokio::select! {
+            select! {
                 _ = &mut first => panic!("waiter must remain pending while IO capacity is occupied"),
                 _ = &mut second => panic!("waiter must remain pending while IO capacity is occupied"),
-                _ = tokio::task::yield_now() => {}
+                _ = yield_now() => {}
             }
         }
     })
     .await
     .expect("both waiters should make an initial saturated attempt");
     release_tx.send(()).unwrap();
-    let (first, second) = timeout(Duration::from_secs(1), async { tokio::join!(&mut first, &mut second) })
+    let (first, second) = timeout(Duration::from_secs(1), async { join!(&mut first, &mut second) })
         .await
         .expect("both waiters should eventually acquire capacity");
     assert_eq!(first.unwrap().await.unwrap(), 1);

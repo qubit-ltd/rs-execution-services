@@ -5,9 +5,12 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Tests snapshot values and disabled-domain representation.
+
 use std::num::NonZeroUsize;
 
 use qubit_execution_services::ExecutionServices;
+use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 
 #[tokio::test]
@@ -42,7 +45,7 @@ async fn snapshot_reports_only_enabled_domains_and_configured_capacities() {
     let report = services.stop();
     assert!(report.io.expect("IO domain should be enabled").cancelled > 0);
     services.await_termination().await;
-    assert!(matches!(io.await, Err(qubit_executor::TaskExecutionError::Cancelled)));
+    assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
     assert_eq!(
         services.snapshot().io.unwrap().lifecycle,
         ExecutorServiceLifecycle::Terminated

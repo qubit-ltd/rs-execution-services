@@ -7,6 +7,11 @@
 // =============================================================================
 //! Best-effort monitoring snapshot for the enabled execution domains.
 
+use qubit_rayon_executor::RayonExecutorServiceStats;
+use qubit_thread_pool::ThreadPoolStats;
+use qubit_tokio_executor::TokioExecutorServiceStats;
+use qubit_tokio_executor::TokioIoExecutorServiceStats;
+
 /// Independent best-effort snapshots of each enabled execution domain.
 ///
 /// The fields are sampled independently. They do not represent one atomic
@@ -28,12 +33,16 @@
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExecutionServicesSnapshot {
-    /// Blocking thread pool snapshot, when enabled.
-    pub blocking: Option<qubit_thread_pool::ThreadPoolStats>,
-    /// CPU executor snapshot, when enabled.
-    pub cpu: Option<qubit_rayon_executor::RayonExecutorServiceStats>,
-    /// Tokio blocking executor snapshot, when enabled.
-    pub tokio_blocking: Option<qubit_tokio_executor::TokioExecutorServiceStats>,
-    /// Tokio IO executor snapshot, when enabled.
-    pub io: Option<qubit_tokio_executor::TokioIoExecutorServiceStats>,
+    /// `Some` contains the blocking thread-pool snapshot; `None` means the
+    /// blocking domain is disabled.
+    pub blocking: Option<ThreadPoolStats>,
+    /// `Some` contains the CPU executor snapshot; `None` means the CPU domain
+    /// is disabled.
+    pub cpu: Option<RayonExecutorServiceStats>,
+    /// `Some` contains the Tokio blocking executor snapshot; `None` means the
+    /// Tokio blocking domain is disabled.
+    pub tokio_blocking: Option<TokioExecutorServiceStats>,
+    /// `Some` contains the Tokio IO executor snapshot; `None` means the IO
+    /// domain is disabled.
+    pub io: Option<TokioIoExecutorServiceStats>,
 }

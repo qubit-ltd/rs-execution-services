@@ -1,3 +1,12 @@
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
+//! Downstream fixture showing managed execution services in an IoC application.
+
 use std::error::Error;
 use std::io;
 use std::sync::Arc;
@@ -14,9 +23,10 @@ use qubit_ioc::bean;
 use qubit_ioc::ContainerBuilder;
 #[cfg(test)]
 use qubit_ioc::Dependency;
-use qubit_ioc::FactoryError;
 use qubit_ioc::CleanupError;
+use qubit_ioc::FactoryError;
 use qubit_ioc::Managed;
+use tokio::runtime::Builder;
 use tokio::runtime::Handle;
 
 #[bean(marker = ExecutionServicesBean)]
@@ -68,7 +78,7 @@ async fn build_application(runtime: Handle) -> Result<ApplicationContext, Box<dy
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
+    let runtime = Builder::new_multi_thread()
         .enable_all()
         .build()?;
     let context = runtime.block_on(build_application(runtime.handle().clone()))?;
@@ -93,6 +103,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
+
+    use qubit_ioc::BuildError;
+
     use super::ContainerBuilder;
     use super::Dependency;
     use super::EventBus;
@@ -100,10 +116,6 @@ mod tests {
     use super::FactoryError;
     use super::Managed;
     use super::Arc;
-    use qubit_ioc::BuildError;
-    use std::sync::atomic::AtomicUsize;
-    use std::sync::atomic::Ordering;
-    use std::io;
 
     #[test]
     fn test_event_bus_missing_registry_prevents_factory_execution() {

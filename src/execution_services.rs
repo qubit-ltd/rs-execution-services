@@ -79,12 +79,51 @@ pub struct ExecutionServices {
 
 impl ExecutionServices {
     /// Creates an empty builder for selecting execution domains.
+    ///
+    /// # Returns
+    ///
+    /// A builder with all execution domains disabled.
     #[inline]
     pub fn builder() -> ExecutionServicesBuilder {
         ExecutionServicesBuilder::new()
     }
 
+    /// Creates an execution-services facade from its enabled execution domains.
+    ///
+    /// # Parameters
+    ///
+    /// * `blocking` - Optional blocking executor domain.
+    /// * `cpu` - Optional CPU-bound executor domain.
+    /// * `tokio_blocking` - Optional Tokio blocking executor domain.
+    /// * `io` - Optional Tokio async IO executor domain.
+    ///
+    /// # Returns
+    ///
+    /// A facade owning every supplied domain and accepting submissions.
+    pub(crate) fn from_parts(
+        blocking: Option<ThreadPool>,
+        cpu: Option<RayonExecutorService>,
+        tokio_blocking: Option<TokioExecutorService>,
+        io: Option<TokioIoExecutorService>,
+    ) -> Self {
+        Self {
+            admission: ExecutionServicesAdmission::new(),
+            blocking: blocking.map(Arc::new),
+            cpu,
+            tokio_blocking,
+            io,
+        }
+    }
+
     /// Returns whether the requested execution domain was enabled.
+    ///
+    /// # Parameters
+    ///
+    /// * `domain` - Execution domain to check.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the facade owns that domain.
     #[must_use]
     #[inline]
     pub fn has_domain(&self, domain: ExecutionDomain) -> bool {
@@ -100,6 +139,11 @@ impl ExecutionServices {
     ///
     /// The domain snapshots are not simultaneous and are intended for
     /// monitoring, not admission or synchronization decisions.
+    ///
+    /// # Returns
+    ///
+    /// Independent statistics for enabled domains. Disabled domains have no
+    /// snapshot.
     #[must_use]
     pub fn snapshot(&self) -> ExecutionServicesSnapshot {
         ExecutionServicesSnapshot {
@@ -107,33 +151,6 @@ impl ExecutionServices {
             cpu: self.cpu.as_ref().map(RayonExecutorService::stats),
             tokio_blocking: self.tokio_blocking.as_ref().map(TokioExecutorService::stats),
             io: self.io.as_ref().map(TokioIoExecutorService::stats),
-        }
-    }
-
-    /// Creates an execution-services facade from its enabled execution domains.
-    ///
-    /// # Parameters
-    ///
-    /// * `blocking` - Blocking executor domain.
-    /// * `cpu` - CPU-bound executor domain.
-    /// * `tokio_blocking` - Tokio blocking executor domain.
-    /// * `io` - Tokio async IO executor domain.
-    ///
-    /// # Returns
-    ///
-    /// An execution-services facade owning all supplied domains.
-    pub(crate) fn from_parts(
-        blocking: Option<ThreadPool>,
-        cpu: Option<RayonExecutorService>,
-        tokio_blocking: Option<TokioExecutorService>,
-        io: Option<TokioIoExecutorService>,
-    ) -> Self {
-        Self {
-            admission: ExecutionServicesAdmission::new(),
-            blocking: blocking.map(Arc::new),
-            cpu,
-            tokio_blocking,
-            io,
         }
     }
 }
