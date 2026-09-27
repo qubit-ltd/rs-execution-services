@@ -19,13 +19,13 @@ use qubit_execution_services::ExecutionServices;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::ApplicationContext;
 use qubit_ioc::BindingKey;
-use qubit_ioc::bean;
+use qubit_ioc::CleanupError;
 use qubit_ioc::ContainerBuilder;
 #[cfg(test)]
 use qubit_ioc::Dependency;
-use qubit_ioc::CleanupError;
 use qubit_ioc::FactoryError;
 use qubit_ioc::Managed;
+use qubit_ioc::bean;
 use tokio::runtime::Builder;
 use tokio::runtime::Handle;
 
@@ -50,9 +50,7 @@ fn execution_services(runtime: Arc<Handle>) -> Result<Managed<ExecutionServices>
 
 #[bean(marker = EventBusBean)]
 fn event_bus(registry: Arc<EventBusRegistry>) -> Result<Managed<EventBus>, FactoryError> {
-    let bus = registry
-        .create(&EventBusConfig::default())
-        .map_err(FactoryError::new)?;
+    let bus = registry.create(&EventBusConfig::default()).map_err(FactoryError::new)?;
     Ok(Managed::new(Arc::new(bus), |bus| {
         bus.shutdown(ShutdownMode::Immediate)
             .map(|_| ())
@@ -78,9 +76,7 @@ async fn build_application(runtime: Handle) -> Result<ApplicationContext, Box<dy
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let runtime = Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
     let context = runtime.block_on(build_application(runtime.handle().clone()))?;
 
     let bus = context.get::<EventBus>()?;
@@ -91,9 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let services = context.get::<ExecutionServices>()?;
     let file_systems = context.get::<FileSystemRegistry>()?;
     assert!(file_systems.is_empty());
-    let result = runtime.block_on(services.spawn_io(async {
-        Ok::<u8, io::Error>(43)
-    })?)?;
+    let result = runtime.block_on(services.spawn_io(async { Ok::<u8, io::Error>(43) })?)?;
     assert_eq!(result, 43);
 
     let mut shutdown = context.begin_shutdown();
@@ -110,13 +104,13 @@ mod tests {
 
     use qubit_ioc::BuildError;
 
+    use super::Arc;
     use super::ContainerBuilder;
     use super::Dependency;
     use super::EventBus;
     use super::EventBusRegistry;
     use super::FactoryError;
     use super::Managed;
-    use super::Arc;
 
     #[test]
     fn test_event_bus_missing_registry_prevents_factory_execution() {
