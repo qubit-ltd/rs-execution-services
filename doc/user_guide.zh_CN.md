@@ -182,6 +182,17 @@ pub async fn make_daily_report(
 3. 用 `blocking_queue_capacity` 限制等待中的 blocking 任务；为 CPU、Tokio blocking 和 IO 设置已接收但尚未完成的任务容量。这些容量默认各为 1024，但不限制任务占用内存。
 4. 决定生产者在有限容量已满时如何处理。提交可能返回 `SubmissionError::Saturated`；可在生产者处施加背压或减少未完成工作后再重试。
 
+使用以下指标按域调整容量。应在有代表性的负载下记录峰值和饱和情况；表中的指标用于测量，不是通用容量建议。
+
+| 执行域 | 配置上限 | 观测指标 | 饱和时的处理 |
+| --- | --- | --- | --- |
+| `blocking` | 核心/最大 worker 数和队列容量 | 队列深度、活动 worker、提交与端到端延迟 | 在生产者施加背压或减少未完成工作；根据测量调整队列和 worker 上限。 |
+| `cpu` | Rayon worker 数和未完成任务容量 | 未完成任务、完成延迟、饱和次数 | 施加背压或减少在途 CPU 任务。 |
+| `tokio_blocking` | facade 未完成任务容量与 runtime `max_blocking_threads` | facade 任务数、runtime 共享池使用量和竞争使用者 | 计入该 runtime 的所有使用者，分别调整上限或减少提交。 |
+| `io` | 未完成 future 容量 | 已接收未完成 future、保留内存、延迟和饱和次数 | 施加背压或减少在途 future。 |
+
+针对应用负载记录峰值到达速率、排队延迟、任务服务时长和 `Saturated` 次数。`snapshot()` 对各域独立采样，不能提供原子的进程级预算，也不能替代提交结果。
+
 容量应由测量结果确定：记录峰值到达速率、任务服务时长和应用可接受的最大排队延迟；用到达速率乘服务时长估算各域的在途需求，再增加有依据的突发余量。blocking worker 数应覆盖需要同时运行的阻塞调用，有限队列另行限制允许的积压。CPU 容量从可用并行度出发，并限制已接纳任务以控制排队内存和延迟。Tokio blocking 的 facade 任务容量应与 runtime 共享的 `max_blocking_threads` 分别配置，并计入同一 runtime 的其他使用者。IO 容量则按并发 future 数及其保留内存估算。通过负载测试检查延迟、`snapshot()` 各域观测值和 `Saturated` 返回，再据实调整；快照只是独立采样，不能预留准入名额。
 
 [资源预算示例](../examples/resource_budget.rs)使用演示数值：runtime 共享 Tokio 阻塞池最多四个线程、独立 blocking 池最多四个 worker（核心线程数为 2）、Rayon 池两个 worker、blocking 队列 32 个任务、CPU 未完成任务 32 个、Tokio blocking 未完成任务 8 个、IO 未完成 future 1 个。这些限制作用于不同资源，不构成通用推荐。
@@ -270,7 +281,7 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 
 ### 应用关闭顺序
 
-facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。先停止报表入口及其他生产者并等待它们退出，再调用：
+facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。关闭请求发出后，已接收任务仍可继续运行；但它们之后通过此 facade 提交子任务会收到 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`。因此，先停止报表入口，并等待所有可能继续提交子任务的生产者完成，再调用：
 
 ```rust
 services.shutdown();
@@ -278,7 +289,7 @@ services.await_termination().await;
 assert!(services.is_terminated());
 ```
 
-等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了生产者和两个执行域的关闭过程。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
+等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了跨域子任务完成后再关闭的顺序。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
 
 应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 

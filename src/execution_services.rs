@@ -45,6 +45,11 @@ use super::ExecutionServicesSnapshot;
 /// or dropping a rejected task. A submission that passed admission may overlap
 /// shutdown or stop; its domain decides whether to accept or reject it. Once
 /// either operation returns, all enabled domains have been closed to new work.
+/// An accepted task may continue running after shutdown is requested, but any
+/// later submission it makes through this facade is rejected with
+/// [`SubmissionError::Shutdown`](qubit_executor::service::SubmissionError::Shutdown).
+/// Stop and await producers that can submit child work before calling
+/// [`Self::shutdown`].
 ///
 /// # Examples
 ///
