@@ -65,6 +65,8 @@ Enable only the domains the application uses. This example selects blocking, CPU
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
@@ -167,7 +169,9 @@ For a complete configuration that separates pool sizes from task capacities, see
 
 ### Waiting for capacity and monitoring
 
-The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods wait for a capacity or lifecycle event and then retry. Capacity notifications are advisory rather than reservations, so competing producers can make a retry saturate again. Their `make` factories can therefore run more than once and must not perform external side effects. Cancelling the wait future stops further attempts; after acceptance, use the returned task handle to control the task.
+The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods accept one callable or future and retain that same task while retrying after capacity or lifecycle notifications. The task runs at most once. Cancelling the wait future stops further attempts and drops an unaccepted task; after acceptance, use the returned task handle to control the task.
+
+Size capacities from measurements. Record peak arrival rate, task service time, and the maximum queue delay the application can tolerate. Estimate each domain's in-flight demand from arrival rate multiplied by service time, then add a documented burst margin. For blocking work, size worker counts for simultaneous blocking calls and size the finite queue separately for the permitted backlog. For CPU work, start from available parallelism and bound accepted in-flight work to limit queued memory and delay. For Tokio blocking work, configure the facade's accepted-task capacity separately from the runtime's shared `max_blocking_threads`; account for other users of that runtime pool. For IO, estimate concurrent futures and their retained memory. Load test the chosen limits, inspect per-domain snapshots and `Saturated` results, and adjust from observed latency and backlog. Snapshots are observational samples and do not reserve admission capacity.
 
 `snapshot()` gathers optional stats from enabled domains. It is a collection of independent samples: the fields do not share one instant and must not be summed or used to synchronize submissions. For the IO domain, `accepted_unfinished` includes accepted futures that have not yet been polled. `ThreadPoolStats::queue_capacity` reports the configured queue limit, with `None` for an unbounded queue.
 
