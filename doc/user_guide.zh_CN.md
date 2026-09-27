@@ -1,55 +1,24 @@
 # Qubit Execution Services 用户手册
 
-[English user guide](user_guide.md) | [中文 README](../README.zh_CN.md)
+[中文 README](../README.zh_CN.md) · [English user guide](user_guide.md) · [API 文档](https://docs.rs/qubit-execution-services)
 
-本手册面向使用 `qubit-execution-services` 0.10.0 的 Rust 应用开发者，介绍如何按任务特点选择执行域、配置受本 crate 管理的线程池、处理提交和执行结果，并在应用退出时关闭服务。本 crate 面向应用层整合；如果库只需要一种执行能力，通常直接依赖对应的底层 crate 更合适。
+本文适用于 `qubit-execution-services` 0.10.0，要求 Rust 1.94 或更高版本。它面向需要在同一应用中安排同步阻塞工作、CPU 计算和异步任务的开发者。读到[检查报表结果](#检查报表结果)，即可完成一次业务任务；容量、监控和停机可在接入后按需查阅。只需要一种执行能力的组件，可以直接使用对应的底层 executor crate。
 
-## 手册目标与读者
+## 它解决什么问题
 
-应用往往同时包含可能阻塞线程的同步调用、CPU 密集型计算和异步任务。把这些工作交给同一类线程或调度器，可能让等待中的任务占用处理其他工作的资源。本手册说明如何通过一个 `ExecutionServices` 实例把任务分派到不同执行域。
+以每日结算报表为例：应用要从只提供同步接口的旧系统读取交易金额，计算总额，再通过异步接口保存报表。旧系统调用会阻塞线程，金额汇总主要消耗 CPU，保存操作要等待异步 I/O。把同步调用放在 Tokio 工作线程上，会阻碍该线程调度其他 future；把计算也交给等待旧系统的线程池，会让两类工作争用同一资源。
 
-## 概念模型
+`ExecutionServices` 让应用按工作特点提交任务，并集中管理这些执行域的关闭。它不会替应用实现旧系统客户端、报表存储、业务重试或跨步骤事务。任务提交成功只表示对应域接纳了任务；报表是否保存成功，还要看任务结果及存储接口的返回契约。
 
-`ExecutionServices` 可持有以下四个执行域中的任意非空子集：
+## 从哪里开始
 
-| 执行域 | 适用工作 | 实现与配置边界 |
-| --- | --- | --- |
-| `blocking` | 可能阻塞 OS 线程的同步工作 | 使用 `qubit-thread-pool` 的 `ThreadPool`；线程池和队列由本 crate 的 builder 配置。 |
-| `cpu` | CPU 密集型同步工作 | 使用 Rayon-backed `RayonExecutorService`；本 crate 可限制已接收但未完成的任务数。 |
-| `tokio_blocking` | Tokio 应用中的阻塞函数 | 使用应用的 Tokio 共享 `spawn_blocking` 池；facade 限制已接收但未完成的任务数，不预留线程。 |
-| `io` | `Future` 任务 | 交给 Tokio async scheduler；future 的输出类型为 `Result<R, E>`。 |
+1. [接入结算报表任务](#接入结算报表任务)给出依赖、可运行的入门例子和实际项目中的职责划分。
+2. [检查报表结果](#检查报表结果)区分提交、执行和业务完成三个阶段。
+3. 按需查阅[选择执行域与核算资源](#选择执行域与核算资源)、[进阶用法](#进阶用法)、[应用关闭顺序](#应用关闭顺序)和[排障](#排障)。
 
-这四个域各自调度任务，并不组成单一调度器。应根据任务是否阻塞、是否主要消耗 CPU 来选域；`spawn_io` 接受合适的异步 future，不限于文件或网络操作。
+## 接入结算报表任务
 
-## 选择执行域与核算资源
-
-| 工作负载 | 执行域 | 执行资源 | 限制值控制什么 |
-| --- | --- | --- | --- |
-| 不依赖 Tokio 的同步文件操作或阻塞 SDK 调用 | `blocking` | 独立 `ThreadPool` | 线程池大小限制运行中的任务；队列容量限制等待任务。 |
-| 图像编码等 CPU 密集型同步工作 | `cpu` | 独立 Rayon 线程池 | 任务容量统计所有已接收但未完成的任务，包括排队和运行中的任务。 |
-| 必须使用应用 Tokio 阻塞池的阻塞函数 | `tokio_blocking` | Tokio 共享的 `spawn_blocking` 线程池 | facade 容量限制本服务已接收但未完成的任务；Tokio `max_blocking_threads` 限制 runtime 共享 worker 数。 |
-| 异步 socket、HTTP 或其他 `Future` 工作 | `io` | 应用的 Tokio runtime | IO 容量限制已接收但未完成的 future，包括尚未 poll 的 future。 |
-
-会等待外部操作的同步 API 使用 `blocking`；闭包主要消耗处理器时间时使用 `cpu`。当阻塞操作应运行在应用的 Tokio runtime 上时才选 `tokio_blocking`；它的 worker 与同一 runtime 上的其他 `spawn_blocking` 使用者共享。异步 future 使用 `io`。容量表示任务数或队列上限，不自动等于线程、连接、速率或内存限制。
-
-核算资源预算时，逐项列出启用域并分别计算：
-
-1. 根据 blocking 最大线程数和 CPU 线程数计算独立 worker。两者默认值分别基于 `available_parallelism()`；同时启用会创建两组独立线程池。
-2. 加上应用配置的 Tokio async worker 和 `max_blocking_threads`。这两项由应用管理，阻塞线程池还与同一 runtime 的其他用户共享。
-3. 用 `blocking_queue_capacity` 限制等待中的 blocking 任务；为 CPU、Tokio blocking 和 IO 设置已接收但尚未完成的任务容量。这些容量默认各为 1024，但不限制任务占用内存。
-4. 决定生产者在有限容量已满时如何处理。提交可能返回 `SubmissionError::Saturated`；可在生产者处施加背压或减少未完成工作后再重试。
-
-[资源预算示例](../examples/resource_budget.rs)使用演示数值：runtime 共享 Tokio 阻塞池最多四个线程、独立 blocking 池最多四个 worker（核心线程数为 2）、Rayon 池两个 worker、blocking 队列 32 个任务、CPU 未完成任务 32 个、Tokio blocking 未完成任务 8 个、IO 未完成 future 64 个。这些限制作用于不同资源，不构成通用推荐。
-
-## 贯穿场景：分发三类任务
-
-假设应用在一次请求处理中要执行同步阻塞操作、CPU 计算和异步工作。目标是让每类任务进入合适的执行域、能够取得结果，并在不再接受新工作后统一关闭服务。
-
-下面用简单计算展示调用路径和预期结果。接入应用时，可替换闭包内部工作，但应根据阻塞与计算特征选择执行域。
-
-## 安装与最小配置
-
-本 crate 要求 Rust 1.94 或更新版本。在应用中添加 crate 和 Tokio 依赖；创建 facade 前需要先有可用的 Tokio runtime：
+在应用中添加 crate 和 Tokio 依赖；启用 Tokio 执行域前需要先有可用的 runtime：
 
 ```toml
 [dependencies]
@@ -57,9 +26,7 @@ qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
-本仓库根据 `Cargo.toml` 中的版本约束，从 crates.io 解析 `qubit-thread-pool`、`qubit-rayon-executor` 和 `qubit-tokio-executor`。发布本 crate 前，registry 中必须已有清单声明的依赖版本。
-
-只启用应用需要的执行域。下面的例子选择 blocking、CPU 和 IO；Tokio blocking 未启用：
+先运行仓库的[入门示例](../examples/quick_start.rs)，确认环境能创建执行域、提交任务并等待结果。它只用计算演示调用路径，随后再接入真实业务：
 
 ```rust
 // =============================================================================
@@ -105,16 +72,115 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-通过 `.await` 等待每个任务 handle，可以在不阻塞当前 Tokio 工作线程的情况下取得 blocking、CPU 和 IO 结果。`TaskHandle::get()` 会阻塞调用线程，适合在同步上下文中使用。每个 callable 或 future 都返回 `Result<R, E>`。提交是否成功由提交方法的返回值表示，任务执行结果由 handle 表示。
+在仓库目录运行 `cargo run --example quick_start`；成功时程序没有输出，三个断言通过并正常退出。这段代码是入门练习，不代表真实业务。通过 `.await` 等待任务句柄，不会阻塞当前 Tokio 工作线程；`TaskHandle::get()` 会阻塞调用线程，只适合同步上下文。
 
-## 核心工作流
+### 在应用启动时创建服务
 
-1. **创建 facade。** 从 `ExecutionServices::builder()` 开始，逐个显式启用所需执行域；仅启用 `tokio_blocking` 或 `io` 时才调用 `runtime(handle)`。纯 blocking 或 CPU 配置不需要 Tokio runtime。至少启用一个执行域后，`build()` 才能成功。
-2. **按任务特点路由。** 可能等待阻塞 API 的同步工作使用 `submit_blocking*`；CPU 密集型同步工作使用 `submit_cpu*`；需要接入 Tokio 的阻塞函数使用 `submit_tokio_blocking*`；异步 future 使用 `spawn_io`。
-3. **选择结果观察方式。** `submit_*` runnable 方法只返回是否接收任务，不提供结果 handle。callable 方法返回可读取任务结果的 handle。需要查询状态或取消任务时，使用 `submit_tracked_*` 变体。
-4. **停止接收任务并等待退出。** 先停止仍可能提交任务的应用组件，并等待它们退出。然后调用 `shutdown()`，对所有已启用域发起优雅关闭。等待 `await_termination()` 完成后，再释放任务使用的资源或停止传入的 Tokio runtime。所有已启用域终止后，该方法返回 `()`。
+报表应用需要 `blocking` 运行旧系统的同步读取，`cpu` 汇总金额，`io` 保存报表。实际应用已有 Tokio runtime 时，使用它的 `Handle`；应用持有 `ExecutionServices`，把引用或 `Arc<ExecutionServices>` 注入报表模块：
 
-提交操作本身可能失败，应在调用处处理或向上传递其 `Result`。任务被接收后仍可能以错误结束；需要确认任务结果时，应检查 handle。
+```rust
+use qubit_execution_services::ExecutionServices;
+
+let services = ExecutionServices::builder()
+    .runtime(tokio::runtime::Handle::current())
+    .enable_blocking()
+    .blocking_pool_size(4)
+    .blocking_queue_capacity(32)
+    .enable_cpu()
+    .cpu_threads(2)
+    .cpu_task_capacity(32)
+    .enable_io()
+    .build()?;
+// 将 services 交给报表模块；应用关闭时仍持有它。
+```
+
+这些数值仅示范配置位置，需根据应用负载调整。`runtime()` 传入的 Tokio runtime 由应用创建和管理。只启用 blocking 或 CPU 时不需要 Tokio handle；启用 `io` 或 `tokio_blocking` 时必须提供。至少启用一个域后 `build()` 才能成功。
+
+### 读取、汇总并保存一天的报表
+
+下面是放进报表模块的集成片段。`LegacyLedger` 和 `ReportStore` 是**应用自行实现**的接口：前者封装旧系统的同步调用，后者封装异步存储。接口应在实际业务操作完成后返回可判断成败的结果。`Vec<u64>` 在这里表示以分为单位的金额；生产应用还需自行定义交易范围、货币和数据一致性规则。
+
+```rust
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use qubit_execution_services::ExecutionServices;
+
+pub trait LegacyLedger: Send + Sync {
+    fn amounts_for_day(&self, day: &str) -> Result<Vec<u64>, io::Error>;
+}
+
+pub trait ReportStore: Send + Sync {
+    fn save<'a>(
+        &'a self,
+        day: &'a str,
+        total_cents: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + Send + 'a>>;
+}
+
+pub async fn make_daily_report(
+    services: &ExecutionServices,
+    ledger: Arc<dyn LegacyLedger>,
+    store: Arc<dyn ReportStore>,
+    day: String,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let read_day = day.clone();
+    let read = services.submit_blocking_callable(move || ledger.amounts_for_day(&read_day))?;
+    let amounts = read.await?;
+
+    let calculate = services.submit_cpu_callable(move || {
+        amounts.iter().copied().try_fold(0_u64, |sum, cents| {
+            sum.checked_add(cents)
+                .ok_or_else(|| io::Error::other("报表金额溢出"))
+        })
+    })?;
+    let total_cents = calculate.await?;
+
+    let save = services.spawn_io(async move {
+        store.save(&day, total_cents).await?;
+        Ok::<u64, io::Error>(total_cents)
+    })?;
+    Ok(save.await?)
+}
+```
+
+报表入口调用 `make_daily_report` 后，成功返回当天总金额（分）；存储接口也已返回成功。读取和汇总分别在独立 worker 上执行，保存的 future 由 Tokio 调度。这里顺序等待每步，因为下一步依赖上一步。闭包和 future 都返回 `Result<R, E>`，捕获的对象须满足对应方法的 `Send` 和生命周期约束。报表应用可随后增加自己的日志、指标和请求响应映射。
+
+## 检查报表结果
+
+| 阶段 | 观察方式 | 成功意味着什么 |
+| --- | --- | --- |
+| 构建 | `build()?` | 所选域和配置有效；不代表业务任务已运行。 |
+| 提交 | `submit_*_callable(...)` 或 `spawn_io(...)` 返回 `Ok(handle)` | 对应域接纳任务；任务可能仍在排队。 |
+| 执行 | `handle.await` 返回 `Ok(value)` | 闭包或 future 成功返回；业务持久化是否完成取决于应用接口契约。 |
+
+报表失败时先区分提交失败与执行失败。提交失败表示这一步没有被执行域接纳；执行失败时，操作可能已产生部分外部副作用，须按旧系统和存储的实际语义补偿。若读取成功而保存失败，重试整个函数会重新读取，源数据在此期间可能变化；应用需决定是否使用幂等键、输入快照或覆盖策略。本 crate 不提供跨步骤事务和自动重试。
+
+只需确认接纳、不需取得执行结果时，可调用 `submit_blocking`、`submit_cpu` 或 `submit_tokio_blocking` 等 runnable 方法；它们返回的 `Ok(())` 不能证明工作已完成。需要读取结果时用 callable；需要查询状态或取消时用 `submit_tracked_*` 变体。后面[错误与诊断](#错误与诊断)列出了构建与提交错误。
+
+## 选择执行域与核算资源
+
+报表例子使用了三个域；如果其他同步函数必须运行在应用的 Tokio 共享阻塞池上，可启用第四个域 `tokio_blocking`。根据操作是否阻塞、是否主要消耗 CPU 来选域；`spawn_io` 接受合适的异步 future，不限于文件或网络操作。
+
+| 工作负载 | 执行域 | 执行资源 | 限制值控制什么 |
+| --- | --- | --- | --- |
+| 不依赖 Tokio 的同步文件操作或阻塞 SDK 调用 | `blocking` | 独立 `ThreadPool` | 线程池大小限制运行中的任务；队列容量限制等待任务。 |
+| 图像编码等 CPU 密集型同步工作 | `cpu` | 独立 Rayon 线程池 | 任务容量统计所有已接收但未完成的任务，包括排队和运行中的任务。 |
+| 必须使用应用 Tokio 阻塞池的阻塞函数 | `tokio_blocking` | Tokio 共享的 `spawn_blocking` 线程池 | facade 容量限制本服务已接收但未完成的任务；Tokio `max_blocking_threads` 限制 runtime 共享 worker 数。 |
+| 异步 socket、HTTP 或其他 `Future` 工作 | `io` | 应用的 Tokio runtime | IO 容量限制已接收但未完成的 future，包括尚未 poll 的 future。 |
+
+会等待外部操作的同步 API 使用 `blocking`；闭包主要消耗处理器时间时使用 `cpu`。当阻塞操作应运行在应用的 Tokio runtime 上时才选 `tokio_blocking`；它的 worker 与同一 runtime 上的其他 `spawn_blocking` 使用者共享。异步 future 使用 `io`。容量表示任务数或队列上限，不自动等于线程、连接、速率或内存限制。
+
+核算资源预算时，逐项列出启用域并分别计算：
+
+1. 根据 blocking 最大线程数和 CPU 线程数计算独立 worker。两者默认值分别基于 `available_parallelism()`；同时启用会创建两组独立线程池。
+2. 加上应用配置的 Tokio async worker 和 `max_blocking_threads`。这两项由应用管理，阻塞线程池还与同一 runtime 的其他用户共享。
+3. 用 `blocking_queue_capacity` 限制等待中的 blocking 任务；为 CPU、Tokio blocking 和 IO 设置已接收但尚未完成的任务容量。这些容量默认各为 1024，但不限制任务占用内存。
+4. 决定生产者在有限容量已满时如何处理。提交可能返回 `SubmissionError::Saturated`；可在生产者处施加背压或减少未完成工作后再重试。
+
+[资源预算示例](../examples/resource_budget.rs)使用演示数值：runtime 共享 Tokio 阻塞池最多四个线程、独立 blocking 池最多四个 worker（核心线程数为 2）、Rayon 池两个 worker、blocking 队列 32 个任务、CPU 未完成任务 32 个、Tokio blocking 未完成任务 8 个、IO 未完成 future 1 个。这些限制作用于不同资源，不构成通用推荐。
 
 ## 进阶用法
 
@@ -124,9 +190,7 @@ blocking 队列默认最多容纳 1024 个等待任务；运行中的任务不�
 
 默认情况下，blocking 域的核心线程数和最大线程数都等于检测到的 CPU 并行度。长时间阻塞的调用可能占满所有 worker。队列尚有空间时，线程池不会扩容，因此该默认值限制并发数，不会随积压自动调整。应根据预期同时阻塞任务数和可接受积压量配置 `blocking_core_pool_size`、`blocking_maximum_pool_size` 和有限的 `blocking_queue_capacity`。有界队列满后，线程池可在达到最大线程数前增加 worker；无界队列会在核心线程数达到后继续排队，不会触发突发扩容。
 
-CPU 池也默认使用检测到的 CPU 并行度，且与 blocking 池相互独立。同时启用两者会创建两组 worker；Tokio 还可能按应用 runtime 的设置创建额外的调度线程和阻塞线程。这些都是单域默认值，不是进程总线程数或内存预算。blocking 队列默认容纳 1024 个等待任务；CPU、Tokio blocking 和 IO 域默认各接受最多 1024 个尚未完成的任务。容量统计任务数量，不统计任务占用内存。应依据峰值并发配置线程数和容量，并在提交接近容量时施加背压。
-
-配置时结合上面的选域表，以及下文的队列扩容行为和任务容量规则。关闭期间应保持传入的 runtime 运行，并在生产者处施加背压。
+CPU 池与 blocking 池相互独立，同时启用会创建两组 worker；Tokio 还会按应用的 runtime 设置使用调度线程和阻塞线程。前述单域默认值不是进程总线程数或内存预算。
 
 builder 将阻塞域配置委托给 `ThreadPoolBuilder`。`blocking_pool_size(n)` 同时设置核心线程数和最大线程数。若希望突发负载下增加线程，可配置有界队列并把最大线程数设得高于核心线程数：
 
@@ -171,11 +235,26 @@ Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务�
 
 如需查看同时配置池大小与任务容量的完整示例，请参阅可运行的[资源预算示例](../examples/resource_budget.rs)。示例数值仅用于说明 builder 用法，并非所有应用都适用的推荐上限。
 
-### 等待容量与监控
+### 容量满时等待，还是让上游稍后再试
 
-立即提交方法在执行域无法接收更多任务时返回 `SubmissionError::Saturated`。`submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 和 `spawn_io_wait` 会等待容量或生命周期事件，然后重试。容量通知不预留名额；多个生产者竞争时，重试仍可能遇到满额。`make` 工厂可能被调用多次，因此不能产生外部副作用。取消等待 future 会停止后续尝试；任务被接收后，通过返回的任务句柄控制它。
+例如报表高峰期，`cpu_task_capacity(32)` 已有 32 个未完成计算任务，第 33 个立即提交会返回 `SubmissionError::Saturated`。生产者可以限制并发、向上游报告繁忙，也可以等待容量恢复后再提交。若报表存储允许等待，可把前面的 `spawn_io` 换为：
 
-`snapshot()` 汇集已启用执行域的可选统计。各字段独立采样，不对应同一时刻，不能相加或用于同步提交。IO 域的 `accepted_unfinished` 包括已接收但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 表示配置的队列上限；无界队列为 `None`。
+```rust
+// 接续 make_daily_report 中取得 total_cents、store 和 day 之后。
+let save = services.spawn_io_wait(|| {
+    let store = Arc::clone(&store);
+    let day = day.clone();
+    async move {
+        store.save(&day, total_cents).await?;
+        Ok::<u64, io::Error>(total_cents)
+    }
+}).await?;
+Ok(save.await?)
+```
+
+第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。`submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait` 用法相同。容量通知不预留名额；多个生产者竞争时，`make` 工厂可能被调用多次。因此工厂只构造新任务，不能在工厂中写库、扣款或发送外部请求。取消等待 future 会停止后续尝试；任务被接纳后由返回的句柄管理。关闭期间等待可能返回 `Shutdown`，应报告给上游而非无限重试。
+
+用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 
 ### Tokio runtime 的归属
 
@@ -191,9 +270,17 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 
 ### 应用关闭顺序
 
-facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。先停止这些任务生产者并等待它们退出，再调用 `services.shutdown()`，然后等待 `services.await_termination()`。等待期间要保持传入的 Tokio runtime 运行；所有任务完成后才释放它们使用的资源。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了生产者和两个执行域的关闭过程。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
+facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。先停止报表入口及其他生产者并等待它们退出，再调用：
 
-应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。在当前 `rust-common` 检出目录中，`rs-task` 通过 Tokio 运行本地引擎，`rs-event-bus` 则由调用方驱动 future；它们都不是本 facade 的生产消费者。应用消费者 fixture 能验证公开 API 边界，但不能证明已有生产采用。
+```rust
+services.shutdown();
+services.await_termination().await;
+assert!(services.is_terminated());
+```
+
+等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了生产者和两个执行域的关闭过程。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
+
+应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 
 ## 错误与诊断
 
@@ -211,6 +298,7 @@ facade 只协调已启用的执行域，不知道哪些业务组件还会提交�
 | blocking 任务持续排队，没有增加 worker | 检查队列是否为无界队列。需要弹性扩展时，改用有界 `blocking_queue_capacity` 并设置更大的 `blocking_maximum_pool_size`。 |
 | 关闭时提交新任务失败 | 检查 `lifecycle()` 状态；记录 shutdown 或 stop 意图后，新提交会被拒绝。已经通过准入检查的提交可能与逐域关闭重叠。 |
 | `await_termination()` 一直未完成 | 检查已接收的 blocking 任务是否仍在运行或等待外部条件；有序关闭会等待底层服务终止。 |
+| 报表保存任务返回错误 | 查看应用实现的 `ReportStore` 错误和存储端状态；提交成功不能证明报表已保存。 |
 
 ## 限制与最佳实践
 
@@ -224,4 +312,4 @@ facade 只协调已启用的执行域，不知道哪些业务组件还会提交�
 
 - [中文 README](../README.zh_CN.md) 与 [English README](../README.md)
 - [API 文档](https://docs.rs/qubit-execution-services)
-- [English user guide](user_guide.md)
+- [English user guide](user_guide.md)（独立维护，内容未随本文同步改写）

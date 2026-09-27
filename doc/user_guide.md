@@ -35,7 +35,7 @@ For a resource budget, write down the enabled domains and account for their limi
 3. Set `blocking_queue_capacity` for waiting blocking tasks, and set CPU, Tokio blocking, and IO capacities for accepted unfinished tasks. These defaults are 1024 each; they do not cap task memory.
 4. Decide what producers do when a finite capacity is full. Submissions can return `SubmissionError::Saturated`; apply back pressure or reduce outstanding work before retrying.
 
-The [resource budget example](../examples/resource_budget.rs) uses illustrative values: at most four Tokio blocking threads for the shared runtime, up to four dedicated blocking workers (core size two), two Rayon workers, a 32-task blocking queue, 32 unfinished CPU tasks, eight unfinished Tokio blocking tasks, and 64 unfinished IO futures. These limits control different resources and are not universal recommendations.
+The [resource budget example](../examples/resource_budget.rs) uses illustrative values: at most four Tokio blocking threads for the shared runtime, up to four dedicated blocking workers (core size two), two Rayon workers, a 32-task blocking queue, 32 unfinished CPU tasks, eight unfinished Tokio blocking tasks, and one unfinished IO future. These limits control different resources and are not universal recommendations.
 
 ## Scenario: Route Three Kinds of Work
 
