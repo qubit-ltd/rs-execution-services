@@ -35,6 +35,17 @@ For a resource budget, write down the enabled domains and account for their limi
 3. Set `blocking_queue_capacity` for waiting blocking tasks, and set CPU, Tokio blocking, and IO capacities for accepted unfinished tasks. These defaults are 1024 each; they do not cap task memory.
 4. Decide what producers do when a finite capacity is full. Submissions can return `SubmissionError::Saturated`; apply back pressure or reduce outstanding work before retrying.
 
+Use the following measurements to tune each domain. Record observed peaks and saturation during representative load; these are measurement fields, not universal capacity recommendations.
+
+| Domain | Configured limits | Observe | When saturated |
+| --- | --- | --- | --- |
+| `blocking` | Core/max workers and queue capacity | Queue depth, active workers, submission and end-to-end latency | Apply producer back pressure or reduce outstanding work; tune queue and worker limits from measurements. |
+| `cpu` | Rayon worker count and unfinished-task capacity | Unfinished tasks, completion latency, saturation count | Apply back pressure or reduce outstanding CPU work. |
+| `tokio_blocking` | Facade unfinished-task capacity and runtime `max_blocking_threads` | Facade task count, shared runtime pool usage, competing users | Account for every runtime user; reduce submissions or adjust the separate limits. |
+| `io` | Unfinished-future capacity | Accepted unfinished futures, retained memory, latency and saturation count | Apply back pressure or reduce in-flight futures. |
+
+Record peak arrival rate, queue delay, task service time, and `Saturated` counts for the application workload. `snapshot()` samples domains independently; it cannot provide an atomic process-wide budget or replace submission results.
+
 The [resource budget example](../examples/resource_budget.rs) uses illustrative values: at most four Tokio blocking threads for the shared runtime, up to four dedicated blocking workers (core size two), two Rayon workers, a 32-task blocking queue, 32 unfinished CPU tasks, eight unfinished Tokio blocking tasks, and one unfinished IO future. These limits control different resources and are not universal recommendations.
 
 ## Installation and Minimal Configuration
@@ -267,11 +278,13 @@ The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed
 
 `await_termination()` uses asynchronous notifications for enabled domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
 
+The facade does not know which application components can submit work or which external resources their tasks use. Accepted tasks may keep running after shutdown is requested, but any child submission they make through this facade after admission closes is rejected with `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`. Stop external entry points and wait for every producer that may submit child work to finish before calling `services.shutdown()`, then await `services.await_termination()`. Keep the supplied runtime running through that wait, and release resources used by accepted tasks only after termination. The [application shutdown example](../examples/application_shutdown.rs) demonstrates this cross-domain order.
+
 The facade also exposes `lifecycle()`, `is_running()`, `is_shutting_down()`, `is_stopping()`, `is_not_running()`, and `is_terminated()` for lifecycle checks.
 
 ### Application shutdown order
 
-The facade coordinates only its enabled execution domains. It does not know which application components can submit work or which external resources their tasks use. Stop those producers first and wait until they have exited; then call `services.shutdown()` and await `services.await_termination()`. Keep the supplied Tokio runtime running through that wait, and release resources used by accepted tasks only after termination. The [application shutdown example](../examples/application_shutdown.rs) shows this sequence with a producer and two domains. `stop()` cancels queued work where the underlying executor supports it, but cannot forcibly interrupt synchronous work that has already started.
+The facade coordinates only its enabled execution domains. Stop producers first and wait until they have exited; then call `services.shutdown()` and await `services.await_termination()`. Keep the supplied Tokio runtime running through that wait, and release resources used by accepted tasks only after termination. `stop()` cancels queued work where the underlying executor supports it, but cannot forcibly interrupt synchronous work that has already started.
 
 Use the facade when an application needs one owner to submit work to and close several execution domains. Components that need only one domain or its specific controls can depend directly on the corresponding executor crate. In the current `rust-common` checkout, `rs-task` runs its local engine on Tokio and `rs-event-bus` leaves future polling to its caller; neither is a production consumer of this facade. The application consumer fixture verifies the public API boundary, not production adoption.
 

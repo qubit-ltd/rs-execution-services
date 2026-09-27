@@ -92,7 +92,7 @@ facade 协调已启用执行域的任务提交与生命周期操作。停止报�
 
 应用需要统一向多个执行域提交任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 
-关闭应用时，先停止会继续提交工作的业务组件，再调用 `shutdown()` 并等待 `await_termination()`；等待期间应保持 Tokio runtime 运行。完整顺序见[应用关闭示例](examples/application_shutdown.rs)和用户手册。
+关闭应用时，先停止入口并等待可能提交子任务的已接收生产者完成，再调用 `shutdown()`；准入关闭后，这类子提交会被拒绝。保持 Tokio runtime 运行，直到 `await_termination()` 完成；顺序见[跨域应用关闭示例](examples/application_shutdown.rs)。各域资源上限不构成进程级线程或内存预算，容量测量方法见[资源预算指南](doc/user_guide.zh_CN.md#选择执行域与核算资源)。
 
 ## 延伸阅读
 

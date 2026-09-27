@@ -100,6 +100,11 @@ impl ExecutionServices {
     /// submission that already passed the facade admission check may overlap
     /// domain shutdown and may be accepted or rejected by that domain. When
     /// this method returns, every enabled domain rejects new submissions.
+    /// Accepted tasks may continue running, but a later child submission
+    /// through this facade is rejected with
+    /// [`SubmissionError::Shutdown`](qubit_executor::service::SubmissionError::Shutdown).
+    /// Stop and await producers that can submit child work before calling
+    /// this method.
     pub fn shutdown(&self) {
         self.admission.request_shutdown();
         if let Some(service) = &self.blocking {

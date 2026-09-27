@@ -70,3 +70,15 @@ fn test_waiting_submission_and_snapshot_contract_is_documented_bilingually() {
     assert!(RESOURCE_BUDGET.contains("spawn_io_wait"));
     assert!(RESOURCE_BUDGET.contains("snapshot()"));
 }
+
+#[test]
+fn test_shutdown_example_and_resource_budget_are_linked_bilingually() {
+    for guide in [ENGLISH_GUIDE, CHINESE_GUIDE] {
+        for anchor in ["application_shutdown.rs", "shutdown()", "snapshot()", "Saturated"] {
+            assert!(guide.contains(anchor), "missing {anchor} in a user guide");
+        }
+    }
+    for readme in [ENGLISH_README, CHINESE_README] {
+        assert!(readme.contains("examples/application_shutdown.rs"));
+    }
+}

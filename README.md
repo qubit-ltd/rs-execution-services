@@ -92,7 +92,7 @@ The facade coordinates submission and lifecycle operations across the enabled do
 
 Use this facade when an application needs one owner to submit work to several execution domains and coordinate their shutdown. A component that needs only one domain or its specific controls can depend directly on that executor crate.
 
-For application shutdown, stop components that produce work first, then call `shutdown()` and await `await_termination()` while the Tokio runtime remains active. See the [application shutdown example](examples/application_shutdown.rs) and user guide for the full sequence.
+For application shutdown, stop entry points and wait for accepted producers that can submit child tasks to finish before calling `shutdown()`. Those later child submissions are rejected after admission closes. Keep the Tokio runtime active until `await_termination()` resolves; see the [cross-domain application shutdown example](examples/application_shutdown.rs). Per-domain resource limits are not a process-wide thread or memory budget; see the [resource budget guide](doc/user_guide.md#choosing-a-domain-and-sizing-resources).
 
 ## Learn More
 
