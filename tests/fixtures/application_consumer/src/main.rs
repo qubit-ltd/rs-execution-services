@@ -9,6 +9,9 @@
 
 use std::io;
 use std::num::NonZeroUsize;
+use std::sync::atomic::AtomicUsize;
+use std::sync::atomic::Ordering;
+use std::sync::Arc;
 
 use qubit_execution_services::ExecutionServices;
 
@@ -45,11 +48,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<u8, io::Error>(44)
         })?;
         tokio::task::yield_now().await;
-        let waiting_io = services.spawn_io_wait(|| async { Ok::<u8, io::Error>(45) });
+        let future_polls = Arc::new(AtomicUsize::new(0));
+        let captured_polls = Arc::clone(&future_polls);
+        let waiting_io = services.spawn_io_wait(async move {
+            captured_polls.fetch_add(1, Ordering::SeqCst);
+            Ok::<u8, io::Error>(45)
+        });
         tokio::task::yield_now().await;
+        assert_eq!(future_polls.load(Ordering::SeqCst), 0);
         release_tx.send(()).expect("first IO producer should be released");
         assert_eq!(first_io.await?, 44);
         assert_eq!(waiting_io.await?.await?, 45);
+        assert_eq!(future_polls.load(Ordering::SeqCst), 1);
         assert_eq!(services.snapshot().io.unwrap().accepted_unfinished, 0);
 
         services.shutdown();

@@ -18,18 +18,72 @@ use std::time::Duration;
 use qubit_execution_services::ExecutionDomain;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesSubmissionError;
+use qubit_executor::TaskExecutionError;
 use qubit_executor::service::SubmissionError;
 use tokio::join;
 use tokio::pin;
 use tokio::runtime::Handle;
-use tokio::select;
 use tokio::sync::oneshot;
 use tokio::task::yield_now;
 use tokio::test as tokio_test;
 use tokio::time::timeout;
 
+struct DropCounter(Arc<AtomicUsize>);
+
+impl Drop for DropCounter {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[tokio_test]
+async fn wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
+    let runtime = Handle::current();
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .enable_cpu()
+        .enable_tokio_blocking()
+        .enable_io()
+        .runtime(runtime)
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()
+        .unwrap();
+
+    let blocking_value = String::from("blocking");
+    let blocking = services
+        .submit_blocking_callable_wait(move || Ok::<usize, io::Error>(blocking_value.len()))
+        .await
+        .unwrap();
+    assert_eq!(blocking.await.unwrap(), 8);
+
+    let cpu_value = String::from("cpu");
+    let cpu = services
+        .submit_cpu_callable_wait(move || Ok::<usize, io::Error>(cpu_value.len()))
+        .await
+        .unwrap();
+    assert_eq!(cpu.await.unwrap(), 3);
+
+    let tokio_blocking_value = String::from("tokio-blocking");
+    let tokio_blocking = services
+        .submit_tokio_blocking_callable_wait(move || Ok::<usize, io::Error>(tokio_blocking_value.len()))
+        .await
+        .unwrap();
+    assert_eq!(tokio_blocking.await.unwrap(), 14);
+
+    let io_value = String::from("io");
+    let io = services
+        .spawn_io_wait(async move { Ok::<usize, io::Error>(io_value.len()) })
+        .await
+        .unwrap();
+    assert_eq!(io.await.unwrap(), 2);
+
+    services.shutdown();
+    services.await_termination().await;
+}
+
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
-async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
+async fn waits_for_blocking_capacity_without_recreating_the_task() {
     let services = ExecutionServices::builder()
         .enable_blocking()
         .blocking_pool_size(1)
@@ -47,14 +101,16 @@ async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     services.submit_blocking_callable(|| Ok::<(), io::Error>(())).unwrap();
-    let calls = AtomicUsize::new(0);
-    let waiting = services.submit_blocking_callable_wait(|| {
-        calls.fetch_add(1, Ordering::SeqCst);
-        || Ok::<usize, io::Error>(42)
+    let calls = Arc::new(AtomicUsize::new(0));
+    let task_calls = Arc::clone(&calls);
+    let payload = String::from("one-shot blocking task");
+    let waiting = services.submit_blocking_callable_wait(move || {
+        task_calls.fetch_add(1, Ordering::SeqCst);
+        Ok::<usize, io::Error>(payload.len())
     });
     pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -63,8 +119,9 @@ async fn waits_for_blocking_capacity_and_calls_factory_only_on_attempts() {
             .unwrap()
             .get()
             .unwrap(),
-        42
+        22
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     running.get().unwrap();
     services.shutdown();
     services.await_termination().await;
@@ -89,7 +146,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
         })
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let waiting = services.submit_cpu_callable_wait(|| || Ok::<usize, io::Error>(42));
+    let waiting = services.submit_cpu_callable_wait(|| Ok::<usize, io::Error>(42));
     pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
@@ -123,7 +180,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
         })
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let waiting = services.submit_tokio_blocking_callable_wait(|| || Ok::<usize, io::Error>(42));
+    let waiting = services.submit_tokio_blocking_callable_wait(|| Ok::<usize, io::Error>(42));
     pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
@@ -155,7 +212,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
         })
         .unwrap();
     yield_now().await;
-    let waiting = services.spawn_io_wait(|| async { Ok::<usize, io::Error>(42) });
+    let waiting = services.spawn_io_wait(async { Ok::<usize, io::Error>(42) });
     pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     release_tx.send(()).unwrap();
@@ -174,17 +231,18 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
 }
 
 #[tokio_test]
-async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
+async fn disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     let disabled = ExecutionServices::builder()
         .enable_blocking()
         .blocking_pool_size(1)
         .build()
         .unwrap();
-    let calls = AtomicUsize::new(0);
+    let calls = Arc::new(AtomicUsize::new(0));
+    let task_calls = Arc::clone(&calls);
     let result = disabled
-        .submit_cpu_callable_wait(|| {
-            calls.fetch_add(1, Ordering::SeqCst);
-            || Ok::<(), io::Error>(())
+        .submit_cpu_callable_wait(move || {
+            task_calls.fetch_add(1, Ordering::SeqCst);
+            Ok::<(), io::Error>(())
         })
         .await;
     let error = match result {
@@ -216,7 +274,12 @@ async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
         })
         .unwrap();
     yield_now().await;
-    let waiting = services.spawn_io_wait(|| async { Ok::<(), io::Error>(()) });
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drop_count));
+    let waiting = services.spawn_io_wait(async move {
+        let _drop_counter = drop_counter;
+        Ok::<(), io::Error>(())
+    });
     pin!(waiting);
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
     services.shutdown();
@@ -227,12 +290,13 @@ async fn disabled_domain_does_not_call_factory_and_shutdown_rejects_waiter() {
             source: SubmissionError::Shutdown
         })
     ));
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
     let _report = services.stop();
     services.await_termination().await;
 }
 
 #[tokio_test]
-async fn cancelling_a_full_capacity_wait_does_not_call_factory_again() {
+async fn cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
     let services = ExecutionServices::builder()
         .enable_io()
         .runtime(Handle::current())
@@ -247,19 +311,58 @@ async fn cancelling_a_full_capacity_wait_does_not_call_factory_again() {
         })
         .unwrap();
     yield_now().await;
-    let calls = Arc::new(AtomicUsize::new(0));
-    let factory_calls = Arc::clone(&calls);
-    let mut waiting = Box::pin(services.spawn_io_wait(move || {
-        factory_calls.fetch_add(1, Ordering::SeqCst);
-        async { Ok::<(), io::Error>(()) }
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drop_count));
+    let mut waiting = Box::pin(services.spawn_io_wait(async move {
+        let _drop_counter = drop_counter;
+        Ok::<(), io::Error>(())
     }));
     assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
     drop(waiting);
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
     release_tx.send(()).unwrap();
     running.await.unwrap();
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
     services.shutdown();
+    services.await_termination().await;
+}
+
+#[tokio_test]
+async fn stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_once() {
+    let services = ExecutionServices::builder()
+        .enable_io()
+        .runtime(Handle::current())
+        .io_task_capacity(NonZeroUsize::new(1).unwrap())
+        .build()
+        .unwrap();
+    let (_release_tx, release_rx) = oneshot::channel::<()>();
+    let running = services
+        .spawn_io(async move {
+            release_rx.await.unwrap();
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    yield_now().await;
+
+    let drop_count = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drop_count));
+    let waiting = services.spawn_io_wait(async move {
+        let _drop_counter = drop_counter;
+        Ok::<(), io::Error>(())
+    });
+    pin!(waiting);
+    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert_eq!(drop_count.load(Ordering::SeqCst), 0);
+
+    let _stop_report = services.stop();
+    assert!(matches!(
+        timeout(Duration::from_secs(1), waiting).await.unwrap(),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
+    ));
+    assert_eq!(drop_count.load(Ordering::SeqCst), 1);
+    assert!(matches!(running.await, Err(TaskExecutionError::Cancelled)));
     services.await_termination().await;
 }
 
@@ -280,30 +383,12 @@ async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
         .unwrap();
     yield_now().await;
 
-    let calls = Arc::new(AtomicUsize::new(0));
-    let first_calls = Arc::clone(&calls);
-    let second_calls = Arc::clone(&calls);
-    let first = services.spawn_io_wait(move || {
-        first_calls.fetch_add(1, Ordering::SeqCst);
-        async { Ok::<usize, io::Error>(1) }
-    });
-    let second = services.spawn_io_wait(move || {
-        second_calls.fetch_add(1, Ordering::SeqCst);
-        async { Ok::<usize, io::Error>(2) }
-    });
+    let first = services.spawn_io_wait(async { Ok::<usize, io::Error>(1) });
+    let second = services.spawn_io_wait(async { Ok::<usize, io::Error>(2) });
     pin!(first);
     pin!(second);
-    timeout(Duration::from_secs(1), async {
-        while calls.load(Ordering::SeqCst) < 2 {
-            select! {
-                _ = &mut first => panic!("waiter must remain pending while IO capacity is occupied"),
-                _ = &mut second => panic!("waiter must remain pending while IO capacity is occupied"),
-                _ = yield_now() => {}
-            }
-        }
-    })
-    .await
-    .expect("both waiters should make an initial saturated attempt");
+    assert!(timeout(Duration::from_millis(20), &mut first).await.is_err());
+    assert!(timeout(Duration::from_millis(20), &mut second).await.is_err());
     release_tx.send(()).unwrap();
     let (first, second) = timeout(Duration::from_secs(1), async { join!(&mut first, &mut second) })
         .await

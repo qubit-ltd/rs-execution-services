@@ -22,26 +22,26 @@ use qubit_tokio_executor::TokioTaskHandle;
 use super::super::ExecutionDomain;
 use super::super::ExecutionServicesSubmissionError;
 use super::ExecutionServices;
+use super::internal::owned_wait_task::OwnedWaitTask;
 
 impl ExecutionServices {
     /// Submits a blocking callable, waiting and retrying when its queue is
     /// full.
     ///
-    /// `make` may be called more than once after a saturation race and must not
-    /// perform external side effects. Cancelling this future while it waits
-    /// does not invoke the factory again. The returned task handle controls
+    /// The task is retained unchanged while capacity is full and runs only
+    /// after an attempt is accepted. Cancelling this future while it waits
+    /// drops the unaccepted task. The returned task handle controls
     /// cancellation after acceptance.
     ///
     /// # Type Parameters
     ///
-    /// * `Make` - Factory type producing a new callable for each attempt.
-    /// * `C` - Callable task type submitted to the blocking domain.
+    /// * `C` - One-shot task submitted to the blocking domain.
     /// * `R` - Successful result type produced by the task.
     /// * `E` - Error type produced by the task.
     ///
     /// # Parameters
     ///
-    /// * `make` - Factory for a fresh blocking callable on each attempt.
+    /// * `task` - One-shot callable that may block an OS thread.
     ///
     /// # Returns
     ///
@@ -51,13 +51,12 @@ impl ExecutionServices {
     ///
     /// Returns `DomainDisabled` if blocking is disabled, or `Rejected` when
     /// shutdown or another submission error prevents acceptance.
-    pub async fn submit_blocking_callable_wait<Make, C, R, E>(
+    pub async fn submit_blocking_callable_wait<C, R, E>(
         &self,
-        make: Make,
+        task: C,
     ) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
-        Make: Fn() -> C + Send + Sync,
-        C: Callable<R, E> + Send + 'static,
+        C: FnOnce() -> Result<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
@@ -67,9 +66,11 @@ impl ExecutionServices {
             .ok_or(ExecutionServicesSubmissionError::DomainDisabled {
                 domain: ExecutionDomain::Blocking,
             })?;
+        let task = OwnedWaitTask::new(task);
         let mut changes = service.capacity_changes();
         loop {
-            let result = self.admission.admit(|| service.submit_callable(make()));
+            let attempt = task.callable_attempt();
+            let result = self.admission.admit(|| service.submit_callable(attempt));
             match result {
                 Ok(handle) => return Ok(handle),
                 Err(SubmissionError::Saturated) => changes.changed().await.map_err(|_| SubmissionError::Shutdown)?,
@@ -80,20 +81,20 @@ impl ExecutionServices {
 
     /// Submits a CPU callable, waiting and retrying when its capacity is full.
     ///
-    /// `make` may be called more than once after a saturation race and must be
-    /// side-effect free. Cancelling the wait future leaves accepted work and
-    /// returned task handles under the caller's control.
+    /// The task is retained unchanged while capacity is full and runs only
+    /// after an attempt is accepted. Cancelling this future while it waits
+    /// drops the unaccepted task. The returned task handle controls
+    /// cancellation after acceptance.
     ///
     /// # Type Parameters
     ///
-    /// * `Make` - Factory type producing a new callable for each attempt.
-    /// * `C` - Callable task type submitted to the CPU domain.
+    /// * `C` - One-shot task submitted to the CPU domain.
     /// * `R` - Successful result type produced by the task.
     /// * `E` - Error type produced by the task.
     ///
     /// # Parameters
     ///
-    /// * `make` - Factory for a fresh CPU callable on each attempt.
+    /// * `task` - One-shot CPU-bound callable.
     ///
     /// # Returns
     ///
@@ -103,13 +104,12 @@ impl ExecutionServices {
     ///
     /// Returns `DomainDisabled` if CPU is disabled, or `Rejected` when
     /// shutdown or another submission error prevents acceptance.
-    pub async fn submit_cpu_callable_wait<Make, C, R, E>(
+    pub async fn submit_cpu_callable_wait<C, R, E>(
         &self,
-        make: Make,
+        task: C,
     ) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
-        Make: Fn() -> C + Send + Sync,
-        C: Callable<R, E> + Send + 'static,
+        C: FnOnce() -> Result<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
@@ -119,9 +119,11 @@ impl ExecutionServices {
             .ok_or(ExecutionServicesSubmissionError::DomainDisabled {
                 domain: ExecutionDomain::Cpu,
             })?;
+        let task = OwnedWaitTask::new(task);
         let mut changes = service.capacity_changes();
         loop {
-            let result = self.admission.admit(|| service.submit_callable(make()));
+            let attempt = task.callable_attempt();
+            let result = self.admission.admit(|| service.submit_callable(attempt));
             match result {
                 Ok(handle) => return Ok(handle),
                 Err(SubmissionError::Saturated) => changes.changed().await.map_err(|_| SubmissionError::Shutdown)?,
@@ -134,20 +136,20 @@ impl ExecutionServices {
     /// full.
     ///
     /// Capacity notifications are advisory, so a competing submitter can make
-    /// the next attempt saturate again. `make` may be called more than once and
-    /// must not perform external side effects. Cancelling this future stops
-    /// further attempts; the returned handle controls an accepted task.
+    /// the next attempt saturate again. The same one-shot task remains owned by
+    /// this future until an attempt is accepted. Cancelling while it waits
+    /// drops the unaccepted task; the returned handle controls an accepted
+    /// task.
     ///
     /// # Type Parameters
     ///
-    /// * `Make` - Factory type producing a new callable for each attempt.
-    /// * `C` - Callable task type submitted to the Tokio blocking domain.
+    /// * `C` - One-shot task submitted to the Tokio blocking domain.
     /// * `R` - Successful result type produced by the task.
     /// * `E` - Error type produced by the task.
     ///
     /// # Parameters
     ///
-    /// * `make` - Factory for a fresh Tokio blocking callable on each attempt.
+    /// * `task` - One-shot blocking callable.
     ///
     /// # Returns
     ///
@@ -157,13 +159,12 @@ impl ExecutionServices {
     ///
     /// Returns `DomainDisabled` if Tokio blocking is disabled, or `Rejected`
     /// when shutdown or another submission error prevents acceptance.
-    pub async fn submit_tokio_blocking_callable_wait<Make, C, R, E>(
+    pub async fn submit_tokio_blocking_callable_wait<C, R, E>(
         &self,
-        make: Make,
+        task: C,
     ) -> Result<TaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
-        Make: Fn() -> C + Send + Sync,
-        C: Callable<R, E> + Send + 'static,
+        C: FnOnce() -> Result<R, E> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
     {
@@ -173,9 +174,11 @@ impl ExecutionServices {
             .ok_or(ExecutionServicesSubmissionError::DomainDisabled {
                 domain: ExecutionDomain::TokioBlocking,
             })?;
+        let task = OwnedWaitTask::new(task);
         let mut changes = service.capacity_changes();
         loop {
-            let result = self.admission.admit(|| service.submit_callable(make()));
+            let attempt = task.callable_attempt();
+            let result = self.admission.admit(|| service.submit_callable(attempt));
             match result {
                 Ok(handle) => return Ok(handle),
                 Err(SubmissionError::Saturated) => changes.changed().await.map_err(|_| SubmissionError::Shutdown)?,
@@ -184,23 +187,22 @@ impl ExecutionServices {
         }
     }
 
-    /// Spawns an IO future, waiting and retrying when the accepted-future
-    /// capacity is full. The factory may be called repeatedly and must be
-    /// side-effect free.
+    /// Submits an IO future, waiting and retrying when accepted-future capacity
+    /// is full. The same future remains owned by this method until an attempt
+    /// is accepted.
     ///
-    /// Cancelling this future stops further attempts; the returned task handle
-    /// controls the future after it has been accepted.
+    /// Cancelling this future while it waits drops the unaccepted IO future.
+    /// The returned task handle controls the future after acceptance.
     ///
     /// # Type Parameters
     ///
-    /// * `Make` - Factory type producing a new future for each attempt.
-    /// * `F` - Future type submitted to the Tokio IO domain.
+    /// * `F` - One-shot future submitted to the Tokio IO domain.
     /// * `R` - Successful output type produced by the future.
     /// * `E` - Error type produced by the future.
     ///
     /// # Parameters
     ///
-    /// * `make` - Factory for a fresh IO future on each attempt.
+    /// * `future` - One-shot future to run on the Tokio runtime.
     ///
     /// # Returns
     ///
@@ -210,12 +212,11 @@ impl ExecutionServices {
     ///
     /// Returns `DomainDisabled` if IO is disabled, or `Rejected` when shutdown
     /// or another submission error prevents acceptance.
-    pub async fn spawn_io_wait<Make, F, R, E>(
+    pub async fn spawn_io_wait<F, R, E>(
         &self,
-        make: Make,
+        future: F,
     ) -> Result<TokioTaskHandle<R, E>, ExecutionServicesSubmissionError>
     where
-        Make: Fn() -> F + Send + Sync,
         F: Future<Output = Result<R, E>> + Send + 'static,
         R: Send + 'static,
         E: Send + 'static,
@@ -226,9 +227,11 @@ impl ExecutionServices {
             .ok_or(ExecutionServicesSubmissionError::DomainDisabled {
                 domain: ExecutionDomain::Io,
             })?;
+        let future = OwnedWaitTask::new(future);
         let mut changes = service.capacity_changes();
         loop {
-            let result = self.admission.admit(|| service.spawn(make()));
+            let attempt = future.future_attempt();
+            let result = self.admission.admit(|| service.spawn(attempt));
             match result {
                 Ok(handle) => return Ok(handle),
                 Err(SubmissionError::Saturated) => changes.changed().await.map_err(|_| SubmissionError::Shutdown)?,
