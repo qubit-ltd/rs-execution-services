@@ -65,6 +65,8 @@ Enable only the domains the application uses. This example selects blocking, CPU
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
