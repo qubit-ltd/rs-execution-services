@@ -21,9 +21,9 @@ the empty registry does not resolve filesystems. `ExecutionServices` receives a
 Tokio runtime handle and executes a small IO task.
 
 `EventBus` and `ExecutionServices` are registered as managed components. The
-application calls `ApplicationContext::shutdown_async()` while the Tokio
-runtime is still alive; the context requests stop for all resources before it
-waits for termination. One test verifies that a missing `EventBusRegistry` is
+application calls `ApplicationContext::begin_shutdown()` while the Tokio
+runtime is still alive, then waits through the returned handle. The context
+requests stop for all resources before it waits for termination. One test verifies that a missing `EventBusRegistry` is
 reported before its factory runs. Another verifies that a later factory
 failure stops a managed resource that was already constructed.
 

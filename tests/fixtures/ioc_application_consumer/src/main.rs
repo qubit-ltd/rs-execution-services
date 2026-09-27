@@ -96,7 +96,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     })?)?;
     assert_eq!(result, 43);
 
-    runtime.block_on(context.shutdown_async())?;
+    let mut shutdown = context.begin_shutdown();
+    runtime.block_on(shutdown.wait())?;
     assert!(services.is_terminated());
     Ok(())
 }
