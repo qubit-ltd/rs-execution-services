@@ -31,6 +31,8 @@ An application can submit a synchronous blocking operation, a CPU calculation, a
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
