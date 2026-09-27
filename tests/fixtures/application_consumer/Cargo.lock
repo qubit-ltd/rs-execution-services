@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-rayon-executor"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "parking_lot",
  "qubit-executor",
@@ -251,7 +251,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-thread-pool"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "crossbeam-deque",
  "qubit-argument",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-tokio-executor"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "parking_lot",
  "qubit-atomic",
