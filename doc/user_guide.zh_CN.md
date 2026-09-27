@@ -312,4 +312,4 @@ assert!(services.is_terminated());
 
 - [中文 README](../README.zh_CN.md) 与 [English README](../README.md)
 - [API 文档](https://docs.rs/qubit-execution-services)
-- [English user guide](user_guide.md)（独立维护，内容未随本文同步改写）
+- [English user guide](user_guide.md)
