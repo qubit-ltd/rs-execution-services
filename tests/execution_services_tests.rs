@@ -882,3 +882,71 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
     }
     drop(runtime);
 }
+
+#[tokio_test]
+async fn shutdown_rejects_child_submission_from_accepted_io_task() {
+    let services = Arc::new(
+        ExecutionServices::builder()
+            .enable_io()
+            .enable_cpu()
+            .runtime(Handle::current())
+            .cpu_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let child_services = Arc::clone(&services);
+    let parent = services
+        .spawn_io(async move {
+            started_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            let result = child_services.submit_cpu_callable(|| Ok::<u8, io::Error>(42));
+            assert!(matches!(
+                result,
+                Err(ExecutionServicesSubmissionError::Rejected {
+                    source: SubmissionError::Shutdown
+                })
+            ));
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+
+    started_rx.await.unwrap();
+    services.shutdown();
+    release_tx.send(()).unwrap();
+    parent.await.unwrap();
+    services.await_termination().await;
+    assert!(services.is_terminated());
+}
+
+#[tokio_test]
+async fn drain_producer_before_shutdown_allows_child_submission() {
+    let services = Arc::new(
+        ExecutionServices::builder()
+            .enable_io()
+            .enable_cpu()
+            .runtime(Handle::current())
+            .cpu_threads(1)
+            .build()
+            .unwrap(),
+    );
+    let (started_tx, started_rx) = oneshot::channel();
+    let (release_tx, release_rx) = oneshot::channel();
+    let child_services = Arc::clone(&services);
+    let producer = services
+        .spawn_io(async move {
+            started_tx.send(()).unwrap();
+            release_rx.await.unwrap();
+            let child = child_services.submit_cpu_callable(|| Ok::<u8, io::Error>(42)).unwrap();
+            Ok::<u8, io::Error>(child.await.unwrap())
+        })
+        .unwrap();
+
+    started_rx.await.unwrap();
+    release_tx.send(()).unwrap();
+    assert_eq!(producer.await.unwrap(), 42);
+    services.shutdown();
+    services.await_termination().await;
+    assert!(services.is_terminated());
+}
