@@ -9,66 +9,74 @@ use qubit_event_bus::spi::ShutdownMode;
 use qubit_execution_services::ExecutionServices;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::ApplicationContext;
+use qubit_ioc::BindingKey;
+use qubit_ioc::bean;
 use qubit_ioc::ContainerBuilder;
+#[cfg(test)]
 use qubit_ioc::Dependency;
 use qubit_ioc::FactoryError;
 use qubit_ioc::CleanupError;
 use qubit_ioc::Managed;
 use tokio::runtime::Handle;
 
-fn build_application(runtime: Handle) -> Result<ApplicationContext, Box<dyn Error>> {
+#[bean(marker = ExecutionServicesBean)]
+fn execution_services(runtime: Arc<Handle>) -> Result<Managed<ExecutionServices>, FactoryError> {
+    let services = ExecutionServices::builder()
+        .enable_io()
+        .runtime((*runtime).clone())
+        .build()
+        .map_err(FactoryError::new)?;
+    Ok(Managed::new(Arc::new(services), |services| {
+        services.shutdown();
+        Ok(())
+    })
+    .with_wait(|services| {
+        Box::pin(async move {
+            services.await_termination().await;
+            Ok(())
+        })
+    }))
+}
+
+#[bean(marker = EventBusBean)]
+fn event_bus(registry: Arc<EventBusRegistry>) -> Result<Managed<EventBus>, FactoryError> {
+    let bus = registry
+        .create(&EventBusConfig::default())
+        .map_err(FactoryError::new)?;
+    Ok(Managed::new(Arc::new(bus), |bus| {
+        bus.shutdown(ShutdownMode::Immediate)
+            .map(|_| ())
+            .map_err(CleanupError::new)
+    }))
+}
+
+async fn build_application(runtime: Handle) -> Result<ApplicationContext, Box<dyn Error>> {
     let mut builder = ContainerBuilder::new();
     builder.register_instance(Arc::new(runtime))?;
     builder.register_instance(Arc::new(FileSystemRegistry::default()))?;
-    builder.register_managed_factory::<ExecutionServices, _>(&[Dependency::of::<Handle>()], |context| {
-        let runtime = context.get::<Handle>().map_err(FactoryError::new)?;
-        let services = ExecutionServices::builder()
-            .enable_io()
-            .runtime((*runtime).clone())
-            .build()
-            .map_err(FactoryError::new)?;
-        Ok(Managed::new(Arc::new(services), |services| {
-            services.shutdown();
-            Ok(())
-        })
-        .with_wait(|services| {
-            Box::pin(async move {
-                services.await_termination().await;
-                Ok(())
-            })
-        }))
-    })?;
+    builder.install::<ExecutionServicesBean>()?;
     builder.register_factory::<EventBusRegistry, _>(&[], |_| {
         let registry = EventBusRegistry::with_local().map_err(FactoryError::new)?;
         registry.seal();
         Ok(Arc::new(registry))
     })?;
-    builder.register_managed_factory::<EventBus, _>(&[Dependency::of::<EventBusRegistry>()], |context| {
-        let registry = context.get::<EventBusRegistry>().map_err(FactoryError::new)?;
-        registry
-            .create(&EventBusConfig::default())
-            .map(|bus| {
-                Managed::new(Arc::new(bus), |bus| {
-                    bus.shutdown(ShutdownMode::Immediate).map(|_| ()).map_err(CleanupError::new)
-                })
-            })
-            .map_err(FactoryError::new)
-    })?;
+    builder.install::<EventBusBean>()?;
     builder.root::<ExecutionServices>();
     builder.root::<EventBus>();
     builder.root::<FileSystemRegistry>();
-    Ok(builder.build()?)
+    Ok(builder.build_async().await?)
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    let context = build_application(runtime.handle().clone())?;
+    let context = runtime.block_on(build_application(runtime.handle().clone()))?;
 
     let bus = context.get::<EventBus>()?;
     let same_bus = context.get::<EventBus>()?;
     assert!(Arc::ptr_eq(&bus, &same_bus));
+    assert!(context.binding_sources(&BindingKey::of::<EventBus>(None)).is_some());
 
     let services = context.get::<ExecutionServices>()?;
     let file_systems = context.get::<FileSystemRegistry>()?;
