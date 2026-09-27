@@ -106,6 +106,10 @@ impl ExecutionServicesBuilder {
     /// No domain is enabled initially. A Tokio runtime is required only if a
     /// Tokio-backed domain is enabled. The default blocking queue and accepted
     /// task capacities are 1024.
+    ///
+    /// # Returns
+    ///
+    /// An empty builder with no execution domains enabled.
     pub fn new() -> Self {
         let pool_size = default_pool_size();
         Self {
@@ -130,6 +134,10 @@ impl ExecutionServicesBuilder {
     }
 
     /// Enables the managed blocking execution domain.
+    ///
+    /// # Returns
+    ///
+    /// This builder with the blocking domain enabled.
     #[inline]
     pub fn enable_blocking(mut self) -> Self {
         self.blocking_enabled = true;
@@ -137,6 +145,10 @@ impl ExecutionServicesBuilder {
     }
 
     /// Enables the Rayon-backed CPU execution domain.
+    ///
+    /// # Returns
+    ///
+    /// This builder with the CPU domain enabled.
     #[inline]
     pub fn enable_cpu(mut self) -> Self {
         self.cpu_enabled = true;
@@ -144,6 +156,10 @@ impl ExecutionServicesBuilder {
     }
 
     /// Enables the Tokio `spawn_blocking` execution domain.
+    ///
+    /// # Returns
+    ///
+    /// This builder with the Tokio blocking domain enabled.
     #[inline]
     pub fn enable_tokio_blocking(mut self) -> Self {
         self.tokio_blocking_enabled = true;
@@ -151,6 +167,10 @@ impl ExecutionServicesBuilder {
     }
 
     /// Enables the Tokio async IO execution domain.
+    ///
+    /// # Returns
+    ///
+    /// This builder with the IO domain enabled.
     #[inline]
     pub fn enable_io(mut self) -> Self {
         self.io_enabled = true;
@@ -158,6 +178,14 @@ impl ExecutionServicesBuilder {
     }
 
     /// Sets the runtime used by enabled Tokio-backed execution domains.
+    ///
+    /// # Parameters
+    ///
+    /// * `runtime` - Handle to the application-owned Tokio runtime.
+    ///
+    /// # Returns
+    ///
+    /// This builder configured with the supplied runtime handle.
     #[inline]
     pub fn runtime(mut self, runtime: Handle) -> Self {
         self.runtime = Some(runtime);
@@ -516,6 +544,7 @@ impl ExecutionServicesBuilder {
 }
 
 impl Default for ExecutionServicesBuilder {
+    /// Creates a builder with no domains enabled and the default capacities.
     fn default() -> Self {
         Self::new()
     }

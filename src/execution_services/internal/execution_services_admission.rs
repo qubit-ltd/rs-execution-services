@@ -29,6 +29,10 @@ fn lock_intent(intent: &Mutex<FacadeIntent>) -> MutexGuard<'_, FacadeIntent> {
 }
 
 /// Tracks facade admission intent and aggregate shutdown requests.
+///
+/// The mutex protects only the facade's intent. It is released before the
+/// supplied submission closure runs, so domain calls and rejected-task drops
+/// cannot hold the admission lock.
 pub struct ExecutionServicesAdmission {
     /// Current aggregate intent, protected while admission is checked or
     /// updated.
@@ -37,15 +41,64 @@ pub struct ExecutionServicesAdmission {
 
 impl ExecutionServicesAdmission {
     /// Creates an admission gate in the running state.
+    ///
+    /// # Returns
+    ///
+    /// A gate that accepts submissions until shutdown or stop is requested.
+    #[must_use]
+    #[inline]
     pub fn new() -> Self {
         Self {
             intent: Mutex::new(FacadeIntent::Running),
         }
     }
 
+    /// Returns the current aggregate shutdown intent.
+    ///
+    /// # Returns
+    ///
+    /// The intent recorded by the facade admission gate.
+    #[must_use]
+    #[inline]
+    pub fn intent(&self) -> FacadeIntent {
+        *lock_intent(&self.intent)
+    }
+
+    /// Returns the aggregate lifecycle for the current intent and domain
+    /// states.
+    ///
+    /// # Parameters
+    ///
+    /// * `states` - Latest lifecycle state for each of the four domains;
+    ///   disabled domains are represented by `None`.
+    ///
+    /// # Returns
+    ///
+    /// Aggregate lifecycle state with termination taking precedence once all
+    /// enabled domains have terminated.
+    #[must_use]
+    #[inline]
+    pub fn lifecycle(&self, states: [Option<ExecutorServiceLifecycle>; 4]) -> ExecutorServiceLifecycle {
+        aggregate_lifecycle(self.intent(), states)
+    }
+
     /// Checks facade admission, then calls `submit` without holding the intent
     /// lock. An overlapping shutdown may cause the underlying domain to
     /// reject work.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - Value returned by the submission closure.
+    /// * `E` - Error type that can represent a [`SubmissionError`].
+    ///
+    /// # Parameters
+    ///
+    /// * `submit` - Closure that submits work to the selected domain.
+    ///
+    /// # Returns
+    ///
+    /// The closure's value, or a shutdown error if facade admission is closed.
+    /// Errors returned by the closure are passed through unchanged.
     pub fn admit<R, E: From<SubmissionError>>(&self, submit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
         let accepting = {
             let intent = lock_intent(&self.intent);
@@ -71,18 +124,6 @@ impl ExecutionServicesAdmission {
     pub fn request_stop(&self) {
         *lock_intent(&self.intent) = FacadeIntent::Stopping;
     }
-
-    /// Returns the current aggregate shutdown intent.
-    #[inline]
-    pub fn intent(&self) -> FacadeIntent {
-        *lock_intent(&self.intent)
-    }
-
-    /// Returns the aggregate lifecycle for the current intent and domain
-    /// states.
-    pub fn lifecycle(&self, states: [Option<ExecutorServiceLifecycle>; 4]) -> ExecutorServiceLifecycle {
-        aggregate_lifecycle(self.intent(), states)
-    }
 }
 
 /// Combines aggregate shutdown intent with the latest state of each domain.
@@ -90,6 +131,15 @@ impl ExecutionServicesAdmission {
 /// Termination takes precedence once every domain is terminated. Before then,
 /// aggregate intent keeps an explicit stop visible even if individual domains
 /// have already terminated.
+///
+/// # Parameters
+///
+/// * `intent` - Facade-wide admission state.
+/// * `states` - Latest state for each domain; disabled domains use `None`.
+///
+/// # Returns
+///
+/// The aggregate lifecycle exposed by the facade.
 fn aggregate_lifecycle(
     intent: FacadeIntent,
     states: [Option<ExecutorServiceLifecycle>; 4],

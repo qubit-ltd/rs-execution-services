@@ -32,6 +32,13 @@ impl ExecutionServices {
     /// does not invoke the factory again. The returned task handle controls
     /// cancellation after acceptance.
     ///
+    /// # Type Parameters
+    ///
+    /// * `Make` - Factory type producing a new callable for each attempt.
+    /// * `C` - Callable task type submitted to the blocking domain.
+    /// * `R` - Successful result type produced by the task.
+    /// * `E` - Error type produced by the task.
+    ///
     /// # Parameters
     ///
     /// * `make` - Factory for a fresh blocking callable on each attempt.
@@ -76,6 +83,13 @@ impl ExecutionServices {
     /// `make` may be called more than once after a saturation race and must be
     /// side-effect free. Cancelling the wait future leaves accepted work and
     /// returned task handles under the caller's control.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `Make` - Factory type producing a new callable for each attempt.
+    /// * `C` - Callable task type submitted to the CPU domain.
+    /// * `R` - Successful result type produced by the task.
+    /// * `E` - Error type produced by the task.
     ///
     /// # Parameters
     ///
@@ -124,6 +138,13 @@ impl ExecutionServices {
     /// must not perform external side effects. Cancelling this future stops
     /// further attempts; the returned handle controls an accepted task.
     ///
+    /// # Type Parameters
+    ///
+    /// * `Make` - Factory type producing a new callable for each attempt.
+    /// * `C` - Callable task type submitted to the Tokio blocking domain.
+    /// * `R` - Successful result type produced by the task.
+    /// * `E` - Error type produced by the task.
+    ///
     /// # Parameters
     ///
     /// * `make` - Factory for a fresh Tokio blocking callable on each attempt.
@@ -169,6 +190,13 @@ impl ExecutionServices {
     ///
     /// Cancelling this future stops further attempts; the returned task handle
     /// controls the future after it has been accepted.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `Make` - Factory type producing a new future for each attempt.
+    /// * `F` - Future type submitted to the Tokio IO domain.
+    /// * `R` - Successful output type produced by the future.
+    /// * `E` - Error type produced by the future.
     ///
     /// # Parameters
     ///
@@ -636,6 +664,17 @@ impl ExecutionServices {
     }
 
     /// Checks facade admission and domain availability before submitting.
+    ///
+    /// # Parameters
+    ///
+    /// * `domain` - Domain requested by the submission method.
+    /// * `service` - Enabled domain service, or `None` when disabled.
+    /// * `submit` - Closure that submits the task to an enabled service.
+    ///
+    /// # Returns
+    ///
+    /// The service's submission result or a facade error for a disabled or
+    /// closed domain.
     fn submit_to<S, R>(
         &self,
         domain: ExecutionDomain,

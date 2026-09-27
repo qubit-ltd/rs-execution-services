@@ -15,50 +15,6 @@ use super::super::ExecutionServicesStopReport;
 use super::ExecutionServices;
 
 impl ExecutionServices {
-    /// Requests graceful shutdown for every execution domain.
-    ///
-    /// The facade records the shutdown intent before closing the domains. A
-    /// submission that already passed the facade admission check may overlap
-    /// domain shutdown and may be accepted or rejected by that domain. When
-    /// this method returns, every enabled domain rejects new submissions.
-    pub fn shutdown(&self) {
-        self.admission.request_shutdown();
-        if let Some(service) = &self.blocking {
-            service.shutdown();
-        }
-        if let Some(service) = &self.cpu {
-            service.shutdown();
-        }
-        if let Some(service) = &self.tokio_blocking {
-            service.shutdown();
-        }
-        if let Some(service) = &self.io {
-            service.shutdown();
-        }
-    }
-
-    /// Requests abrupt stop for every execution domain.
-    ///
-    /// The facade records the stop intent before stopping the domains. A
-    /// submission that already passed the facade admission check may overlap
-    /// domain shutdown and may be accepted or rejected by that domain. When
-    /// this method returns, every enabled domain rejects new submissions. The
-    /// report samples domains sequentially in facade order.
-    ///
-    /// # Returns
-    ///
-    /// A per-domain aggregate report describing queued, running, and cancelled
-    /// work observed during shutdown.
-    pub fn stop(&self) -> ExecutionServicesStopReport {
-        self.admission.request_stop();
-        ExecutionServicesStopReport {
-            blocking: self.blocking.as_ref().map(|service| service.stop()),
-            cpu: self.cpu.as_ref().map(|service| service.stop()),
-            tokio_blocking: self.tokio_blocking.as_ref().map(|service| service.stop()),
-            io: self.io.as_ref().map(|service| service.stop()),
-        }
-    }
-
     /// Returns the aggregate lifecycle state.
     ///
     /// # Returns
@@ -136,6 +92,50 @@ impl ExecutionServices {
     #[inline]
     pub fn is_terminated(&self) -> bool {
         self.lifecycle() == ExecutorServiceLifecycle::Terminated
+    }
+
+    /// Requests graceful shutdown for every execution domain.
+    ///
+    /// The facade records the shutdown intent before closing the domains. A
+    /// submission that already passed the facade admission check may overlap
+    /// domain shutdown and may be accepted or rejected by that domain. When
+    /// this method returns, every enabled domain rejects new submissions.
+    pub fn shutdown(&self) {
+        self.admission.request_shutdown();
+        if let Some(service) = &self.blocking {
+            service.shutdown();
+        }
+        if let Some(service) = &self.cpu {
+            service.shutdown();
+        }
+        if let Some(service) = &self.tokio_blocking {
+            service.shutdown();
+        }
+        if let Some(service) = &self.io {
+            service.shutdown();
+        }
+    }
+
+    /// Requests abrupt stop for every execution domain.
+    ///
+    /// The facade records the stop intent before stopping the domains. A
+    /// submission that already passed the facade admission check may overlap
+    /// domain shutdown and may be accepted or rejected by that domain. When
+    /// this method returns, every enabled domain rejects new submissions. The
+    /// report samples domains sequentially in facade order.
+    ///
+    /// # Returns
+    ///
+    /// A per-domain aggregate report describing queued, running, and cancelled
+    /// work observed during shutdown.
+    pub fn stop(&self) -> ExecutionServicesStopReport {
+        self.admission.request_stop();
+        ExecutionServicesStopReport {
+            blocking: self.blocking.as_ref().map(|service| service.stop()),
+            cpu: self.cpu.as_ref().map(|service| service.stop()),
+            tokio_blocking: self.tokio_blocking.as_ref().map(|service| service.stop()),
+            io: self.io.as_ref().map(|service| service.stop()),
+        }
     }
 
     /// Waits until every execution domain has terminated.

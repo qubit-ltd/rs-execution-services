@@ -5,6 +5,9 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates stopping task producers before shutting down execution
+//! services.
+
 use std::io;
 use std::sync::Arc;
 

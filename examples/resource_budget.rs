@@ -5,6 +5,8 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates independent worker and task-capacity limits per domain.
+
 use std::io;
 use std::num::NonZeroUsize;
 
