@@ -53,7 +53,7 @@ qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
-When building this repository from source, first run `./.infra/tools/prepare-local-path-dependencies.sh` from the crate root. It prepares the adjacent `rs-thread-pool`, `rs-rayon-executor`, and `rs-tokio-executor` checkouts used by the development manifest. An application using the published crate does not need these sibling repositories. Publishing requires the matching `qubit-thread-pool` version to be available in the registry.
+This repository resolves `qubit-thread-pool`, `qubit-rayon-executor`, and `qubit-tokio-executor` from crates.io using the version requirements in `Cargo.toml`. Publishing requires the matching dependency versions to be available in the registry.
 
 Enable only the domains the application uses. This example selects blocking, CPU, and IO; Tokio blocking remains disabled:
 

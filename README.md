@@ -101,13 +101,7 @@ For application shutdown, stop components that produce work first, then call `sh
 
 ## Development Setup
 
-When developing this repository, prepare the adjacent `rs-thread-pool`, `rs-rayon-executor`, and `rs-tokio-executor` checkouts before running Cargo commands:
-
-```bash
-./.infra/tools/prepare-local-path-dependencies.sh
-```
-
-Applications using a published release need only the matching crates.io versions. Publishing this crate also requires its declared `qubit-thread-pool` version to be available in the registry. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
+This repository resolves `qubit-thread-pool`, `qubit-rayon-executor`, and `qubit-tokio-executor` from crates.io using the version requirements in `Cargo.toml`. Publishing this crate requires the declared dependency versions to be available in the registry. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
 
 ## Testing
 
