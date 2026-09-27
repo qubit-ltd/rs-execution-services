@@ -31,6 +31,8 @@ An application can submit a synchronous blocking operation, a CPU calculation, a
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
@@ -82,7 +84,7 @@ The blocking and CPU domains each create a separate pool, while the application 
 
 `tokio_blocking` uses the application's shared Tokio blocking pool. Its task capacity bounds accepted, unfinished tasks; it does not reserve threads or configure a dedicated running-concurrency limit. Actual concurrency also depends on the runtime's shared blocking pool and its other users. See the runnable [resource budget example](examples/resource_budget.rs) for one explicit configuration. Its numbers are illustrative, not universal defaults.
 
-Use `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, or `spawn_io_wait` to wait for capacity. Their factories may run more than once after a submission race and must be free of external side effects. Dropping the wait future cancels the wait. `snapshot()` returns independent per-domain monitoring data, not an atomic cross-domain view. Builder calls that configure a disabled domain are rejected by `build()`.
+Use `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, or `spawn_io_wait` to wait for capacity. Each accepts one task and retains it across submission retries; the task runs at most once. Dropping the wait future cancels the wait and drops an unaccepted task. `snapshot()` returns independent per-domain monitoring data, not an atomic cross-domain view. Builder calls that configure a disabled domain are rejected by `build()`.
 
 For workload-based domain selection and a step-by-step resource budget, see [Choosing a Domain and Sizing Resources](doc/user_guide.md#choosing-a-domain-and-sizing-resources).
 

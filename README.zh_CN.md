@@ -31,6 +31,8 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
@@ -82,7 +84,7 @@ blocking 和 CPU 执行域会分别创建线程池，Tokio runtime 则由应用�
 
 `tokio_blocking` 使用应用所拥有的 Tokio 共享阻塞线程池。它的任务容量限制已接收但尚未完成的任务数，不预留线程，也不配置专属的运行并发数；实际同时运行数还取决于 runtime 的共享阻塞池和其他使用者。完整配置见可运行的[资源预算示例](examples/resource_budget.rs)；其中数值仅用于演示，不是通用默认值。
 
-需要等待容量时，可使用 `submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 或 `spawn_io_wait`。容量竞争可能导致工厂被调用多次，因此工厂不能产生外部副作用；丢弃等待 future 会取消等待。`snapshot()` 返回各域独立采样的监控信息，不是跨域原子快照。builder 配置未启用的执行域时，`build()` 会报错。
+需要等待容量时，可使用 `submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 或 `spawn_io_wait`。每个方法接收一个任务，并在提交重试期间保留该任务；任务至多执行一次。丢弃等待 future 会取消等待并释放尚未接纳的任务。`snapshot()` 返回各域独立采样的监控信息，不是跨域原子快照。builder 配置未启用的执行域时，`build()` 会报错。
 
 按工作负载选择执行域并逐项核算资源的方法，见[选择执行域与核算资源](doc/user_guide.zh_CN.md#选择执行域与核算资源)。
 

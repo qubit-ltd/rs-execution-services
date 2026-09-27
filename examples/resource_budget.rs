@@ -52,11 +52,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             Ok::<u8, io::Error>(44)
         })?;
         tokio::task::yield_now().await;
-        let waiting_io = services.spawn_io_wait(|| async { Ok::<u8, io::Error>(45) });
+        let waiting_value = String::from("one-shot IO task");
+        let waiting_io = services.spawn_io_wait(async move { Ok::<usize, io::Error>(waiting_value.len()) });
         tokio::task::yield_now().await;
         release_tx.send(()).expect("IO producer should be released");
         assert_eq!(first_io.await?, 44);
-        assert_eq!(waiting_io.await?.await?, 45);
+        assert_eq!(waiting_io.await?.await?, 16);
         let snapshot = services.snapshot();
         assert_eq!(snapshot.io.expect("IO domain enabled").accepted_unfinished, 0);
 

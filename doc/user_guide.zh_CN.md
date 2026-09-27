@@ -36,6 +36,8 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
+//! Demonstrates submitting and awaiting work in separate execution domains.
+
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
@@ -180,6 +182,8 @@ pub async fn make_daily_report(
 3. 用 `blocking_queue_capacity` 限制等待中的 blocking 任务；为 CPU、Tokio blocking 和 IO 设置已接收但尚未完成的任务容量。这些容量默认各为 1024，但不限制任务占用内存。
 4. 决定生产者在有限容量已满时如何处理。提交可能返回 `SubmissionError::Saturated`；可在生产者处施加背压或减少未完成工作后再重试。
 
+容量应由测量结果确定：记录峰值到达速率、任务服务时长和应用可接受的最大排队延迟；用到达速率乘服务时长估算各域的在途需求，再增加有依据的突发余量。blocking worker 数应覆盖需要同时运行的阻塞调用，有限队列另行限制允许的积压。CPU 容量从可用并行度出发，并限制已接纳任务以控制排队内存和延迟。Tokio blocking 的 facade 任务容量应与 runtime 共享的 `max_blocking_threads` 分别配置，并计入同一 runtime 的其他使用者。IO 容量则按并发 future 数及其保留内存估算。通过负载测试检查延迟、`snapshot()` 各域观测值和 `Saturated` 返回，再据实调整；快照只是独立采样，不能预留准入名额。
+
 [资源预算示例](../examples/resource_budget.rs)使用演示数值：runtime 共享 Tokio 阻塞池最多四个线程、独立 blocking 池最多四个 worker（核心线程数为 2）、Rayon 池两个 worker、blocking 队列 32 个任务、CPU 未完成任务 32 个、Tokio blocking 未完成任务 8 个、IO 未完成 future 1 个。这些限制作用于不同资源，不构成通用推荐。
 
 ## 进阶用法
@@ -241,18 +245,14 @@ Tokio 阻塞域和 IO 域默认各自最多接收 1024 个尚未完成的任务�
 
 ```rust
 // 接续 make_daily_report 中取得 total_cents、store 和 day 之后。
-let save = services.spawn_io_wait(|| {
-    let store = Arc::clone(&store);
-    let day = day.clone();
-    async move {
-        store.save(&day, total_cents).await?;
-        Ok::<u64, io::Error>(total_cents)
-    }
+let save = services.spawn_io_wait(async move {
+    store.save(&day, total_cents).await?;
+    Ok::<u64, io::Error>(total_cents)
 }).await?;
 Ok(save.await?)
 ```
 
-第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。`submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait` 用法相同。容量通知不预留名额；多个生产者竞争时，`make` 工厂可能被调用多次。因此工厂只构造新任务，不能在工厂中写库、扣款或发送外部请求。取消等待 future 会停止后续尝试；任务被接纳后由返回的句柄管理。关闭期间等待可能返回 `Shutdown`，应报告给上游而非无限重试。
+第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。`submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait` 用法相同。每次等待只接收一个任务，并在重试期间保留它，因此任务至多执行一次。取消等待 future 会停止后续尝试并释放尚未接纳的任务；任务被接纳后由返回的句柄管理。关闭期间等待可能返回 `Shutdown`，应报告给上游而非无限重试。
 
 用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 
