@@ -37,12 +37,6 @@ For a resource budget, write down the enabled domains and account for their limi
 
 The [resource budget example](../examples/resource_budget.rs) uses illustrative values: at most four Tokio blocking threads for the shared runtime, up to four dedicated blocking workers (core size two), two Rayon workers, a 32-task blocking queue, 32 unfinished CPU tasks, eight unfinished Tokio blocking tasks, and one unfinished IO future. These limits control different resources and are not universal recommendations.
 
-## Scenario: Route Three Kinds of Work
-
-Suppose an application must perform a blocking operation, calculate a CPU-bound result, and await asynchronous work in the same request flow. The success criteria are that each task runs through its intended domain, each result can be observed, and the services can be shut down together.
-
-The example below uses small computations so the return values are easy to verify. Replace the closures with application work while preserving the domain choice.
-
 ## Installation and Minimal Configuration
 
 The crate requires Rust 1.94 or newer. Add the published crate to the application. Add Tokio when using either Tokio-backed domain; provide its runtime handle only when enabling those domains:
@@ -104,6 +98,94 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 ```
 
 Awaiting each task handle observes the blocking, CPU, and IO results without blocking the current Tokio worker. `TaskHandle::get()` blocks the calling thread and is intended for synchronous contexts. Each callable or future returns `Result<R, E>`; the handle reports task completion separately from whether submission was accepted.
+
+## Scenario: Generate a Daily Settlement Report
+
+A settlement application needs to read transaction amounts from a legacy client with a synchronous API, total them, and save the report through an asynchronous store. The read can block an OS thread, the total is CPU work, and saving returns a future. The application supplies the legacy client and store; this crate routes each step and coordinates service shutdown. The success condition is that saving completes successfully and the report total is returned to the caller.
+
+### Create the services during application startup
+
+Keep the runtime and `ExecutionServices` owned by the application. Pass the service to the report component by reference or through `Arc<ExecutionServices>`:
+
+```rust
+use qubit_execution_services::ExecutionServices;
+
+let services = ExecutionServices::builder()
+    .runtime(tokio::runtime::Handle::current())
+    .enable_blocking()
+    .blocking_pool_size(4)
+    .blocking_queue_capacity(32)
+    .enable_cpu()
+    .cpu_threads(2)
+    .cpu_task_capacity(32)
+    .enable_io()
+    .build()?;
+// Inject `services` into the report component and retain it through shutdown.
+```
+
+These values show where configuration belongs; choose pool sizes and capacities from the application's workload. The application creates and owns the Tokio runtime. A blocking-only or CPU-only setup does not need a runtime handle.
+
+### Read, total, and save one day's report
+
+`LegacyLedger` and `ReportStore` are application interfaces. The first wraps the synchronous legacy system call; the second wraps the asynchronous persistence API. Both should return only after their respective business operation has a meaningful success or failure result. Here, each `u64` is an amount in cents. A production application must define its transaction window, currency, and consistency rules.
+
+```rust
+use std::future::Future;
+use std::io;
+use std::pin::Pin;
+use std::sync::Arc;
+
+use qubit_execution_services::ExecutionServices;
+
+pub trait LegacyLedger: Send + Sync {
+    fn amounts_for_day(&self, day: &str) -> Result<Vec<u64>, io::Error>;
+}
+
+pub trait ReportStore: Send + Sync {
+    fn save<'a>(
+        &'a self,
+        day: &'a str,
+        total_cents: u64,
+    ) -> Pin<Box<dyn Future<Output = Result<(), io::Error>> + Send + 'a>>;
+}
+
+pub async fn make_daily_report(
+    services: &ExecutionServices,
+    ledger: Arc<dyn LegacyLedger>,
+    store: Arc<dyn ReportStore>,
+    day: String,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    let read_day = day.clone();
+    let read = services.submit_blocking_callable(move || ledger.amounts_for_day(&read_day))?;
+    let amounts = read.await?;
+
+    let calculate = services.submit_cpu_callable(move || {
+        amounts.iter().copied().try_fold(0_u64, |sum, cents| {
+            sum.checked_add(cents)
+                .ok_or_else(|| io::Error::other("report amount overflow"))
+        })
+    })?;
+    let total_cents = calculate.await?;
+
+    let save = services.spawn_io(async move {
+        store.save(&day, total_cents).await?;
+        Ok::<u64, io::Error>(total_cents)
+    })?;
+    Ok(save.await?)
+}
+```
+
+When `make_daily_report` returns `Ok(total_cents)`, the store's `save` future has also returned `Ok(())`. The three awaits are sequential because each step consumes the previous step's result. The submission can fail before a task is accepted; after acceptance, the handle reports the task's own result.
+
+| Stage | Observable result | What success means |
+| --- | --- | --- |
+| Build | `build()?` returns a service | The selected domains and settings are valid; no report has run yet. |
+| Submit | A callable or `spawn_io` method returns `Ok(handle)` | The domain accepted that step; it may still be queued. |
+| Complete | `handle.await` returns `Ok(value)` | The callable or future returned successfully. Persistence is complete only if the store contract says its future resolves after persistence. |
+
+If reading, totaling, or saving fails, handle the submission error or task error at that stage. A task may have caused an external side effect before it returns an error, so compensation depends on the legacy system and store. If saving fails and the application retries the whole function, it reads the legacy system again; the source data may have changed. Use an idempotency key, a captured input snapshot, or an overwrite policy if the business contract requires it. This crate does not provide a transaction across these steps or automatically retry them.
+
+Use runnable submission methods such as `submit_blocking` when the caller only needs to know that work was accepted. Use callable methods when the result matters, and `submit_tracked_*` variants when status or cancellation is needed. The [Errors and Diagnostics](#errors-and-diagnostics) and [Troubleshooting](#troubleshooting) sections cover common failure signals.
 
 ## Core Workflow
 
@@ -209,6 +291,7 @@ Use the facade when an application needs one owner to submit work to and close s
 | Blocking work queues instead of using more workers | Check whether the blocking queue is unbounded. Configure a bounded `blocking_queue_capacity` and a larger `blocking_maximum_pool_size` if elastic growth is desired. |
 | A new submission fails during shutdown | Check `lifecycle()`; once shutdown or stop intent is recorded, new submissions are rejected. A submission already past admission may overlap domain shutdown or stop. |
 | `await_termination()` does not resolve | Check whether accepted blocking work is still running or waiting on an external condition; graceful shutdown waits for underlying services to terminate. |
+| Report saving returns an error | Inspect the application `ReportStore` error and persistence status. Submission acceptance alone does not mean the report was saved. |
 
 ## Limitations and Best Practices
 
