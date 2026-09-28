@@ -111,6 +111,8 @@ jobs:
         with:
           toolchain: 1.94
           components: clippy
+      - name: Install Clippy for IoC consumer checks
+        run: rustup component add clippy --toolchain 1.94.0
       - name: Run pinned IoC consumer integration
         run: ./ioc-ci-check.sh
 
