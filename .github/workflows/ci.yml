@@ -100,7 +100,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-event-bus
-          ref: bf7ab432947070e6e8bbc6ffe02560eb1957ad27
+          ref: f19afc39f82b402b9793a34b8b0f0f23d2364dfe
           path: rs-event-bus
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
