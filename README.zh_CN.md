@@ -84,7 +84,7 @@ blocking 和 CPU 执行域会分别创建线程池，Tokio runtime 则由应用�
 
 `tokio_blocking` 使用应用所拥有的 Tokio 共享阻塞线程池。它的任务容量限制已接收但尚未完成的任务数，不预留线程，也不配置专属的运行并发数；实际同时运行数还取决于 runtime 的共享阻塞池和其他使用者。完整配置见可运行的[资源预算示例](examples/resource_budget.rs)；其中数值仅用于演示，不是通用默认值。
 
-需要等待容量时，可使用 `submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 或 `spawn_io_wait`。每个方法接收一个任务，并在提交重试期间保留该任务；任务至多执行一次。丢弃等待 future 会取消等待并释放尚未接纳的任务。`snapshot()` 返回各域独立采样的监控信息，不是跨域原子快照。builder 配置未启用的执行域时，`build()` 会报错。
+需要等待容量时，可使用 `submit_blocking_callable_wait`、`submit_cpu_callable_wait`、`submit_tokio_blocking_callable_wait` 或 `spawn_io_wait`。这些惰性 future 会保留同一个任务并重试，最多接纳一次；获接纳前丢弃 future 会释放尚未提交的任务。三个同步 wait 方法返回只能观察结果的 `TaskHandle`，不提供取消方法；IO 返回的 `TokioTaskHandle` 可以请求 abort，但可能与正常完成竞争。准入、容量和取消契约见[设计文档](doc/design.zh_CN.md)。`snapshot()` 返回各域独立采样的监控信息，不是跨域原子快照。
 
 按工作负载选择执行域并逐项核算资源的方法，见[选择执行域与核算资源](doc/user_guide.zh_CN.md#选择执行域与核算资源)。
 
@@ -99,6 +99,8 @@ facade 协调已启用执行域的任务提交与生命周期操作。停止报�
 - [English user guide](doc/user_guide.md)
 - [中文用户手册](doc/user_guide.zh_CN.md)
 - [API 文档](https://docs.rs/qubit-execution-services)
+- [设计文档](doc/design.zh_CN.md) · [Design documents](doc/design.md)
+- [每日报表示例](examples/daily_report.rs)
 - [English README](README.md)
 
 ## 开发环境

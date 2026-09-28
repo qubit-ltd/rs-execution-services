@@ -84,7 +84,7 @@ The blocking and CPU domains each create a separate pool, while the application 
 
 `tokio_blocking` uses the application's shared Tokio blocking pool. Its task capacity bounds accepted, unfinished tasks; it does not reserve threads or configure a dedicated running-concurrency limit. Actual concurrency also depends on the runtime's shared blocking pool and its other users. See the runnable [resource budget example](examples/resource_budget.rs) for one explicit configuration. Its numbers are illustrative, not universal defaults.
 
-Use `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, or `spawn_io_wait` to wait for capacity. Each accepts one task and retains it across submission retries; the task runs at most once. Dropping the wait future cancels the wait and drops an unaccepted task. `snapshot()` returns independent per-domain monitoring data, not an atomic cross-domain view. Builder calls that configure a disabled domain are rejected by `build()`.
+Use `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, or `spawn_io_wait` to wait for capacity. Each is lazy, retains one task across retries, and submits it at most once. Dropping the future before acceptance drops the unaccepted task. The synchronous wait methods return a result-only `TaskHandle`; it has no cancellation method. IO returns a `TokioTaskHandle` whose abort request can race normal completion. See the [design documents](doc/design.md) for admission, capacity, and cancellation contracts. `snapshot()` returns independent per-domain monitoring data, not an atomic cross-domain view.
 
 For workload-based domain selection and a step-by-step resource budget, see [Choosing a Domain and Sizing Resources](doc/user_guide.md#choosing-a-domain-and-sizing-resources).
 
@@ -99,6 +99,8 @@ For application shutdown, stop entry points and wait for accepted producers that
 - [English user guide](doc/user_guide.md)
 - [中文用户手册](doc/user_guide.zh_CN.md)
 - [API documentation](https://docs.rs/qubit-execution-services)
+- [Design documents](doc/design.md) · [设计文档](doc/design.zh_CN.md)
+- [Daily report example](examples/daily_report.rs)
 - [中文 README](README.zh_CN.md)
 
 ## Development Setup

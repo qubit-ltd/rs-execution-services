@@ -17,7 +17,7 @@ include = [
     "/LICENSE",
     "/README.md",
     "/README.zh_CN.md",
-    "/doc/**/user_guide*.md",
+    "/doc/**/*.md",
     "/examples/**",
     "/resources/**",
     "/src/**",
@@ -30,7 +30,7 @@ doctest = true
 
 [dependencies]
 thiserror = "^2.0"
-tokio = { version = "^1.53", features = ["macros", "rt"] }
+tokio = { version = "^1.53", features = ["macros", "rt", "sync"] }
 
 qubit-function = "0.18"
 qubit-executor = "0.8"
