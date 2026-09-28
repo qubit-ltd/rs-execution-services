@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-ioc
-          ref: 762660f56e425a5b1b442528a9f979a2c41a1a9d
+          ref: 27f9ea43550fcaaf321cce33a1917348d0b44fd3
           path: rs-ioc
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
