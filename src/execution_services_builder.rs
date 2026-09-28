@@ -95,6 +95,18 @@ pub struct ExecutionServicesBuilder {
 impl fmt::Debug for ExecutionServicesBuilder {
     /// Formats the builder without exposing its runtime handle or pool
     /// settings.
+    ///
+    /// # Parameters
+    ///
+    /// * `formatter` - Formatter receiving the opaque builder representation.
+    ///
+    /// # Returns
+    ///
+    /// The formatter result after writing the builder's type name.
+    ///
+    /// # Errors
+    ///
+    /// Returns the formatting error reported by `formatter`.
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.debug_struct("ExecutionServicesBuilder").finish()
     }
@@ -545,6 +557,10 @@ impl ExecutionServicesBuilder {
 
 impl Default for ExecutionServicesBuilder {
     /// Creates a builder with no domains enabled and the default capacities.
+    ///
+    /// # Returns
+    ///
+    /// An empty builder configured with the default pool sizes and capacities.
     fn default() -> Self {
         Self::new()
     }

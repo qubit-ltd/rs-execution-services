@@ -5,11 +5,7 @@
 //
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
-//! Private helpers that coordinate execution service domains.
+//! Tests public submission and capacity-wait contracts.
 
-mod facade_intent;
-pub(super) mod owned_wait_task;
-
-pub(super) mod execution_services_admission;
-
-pub(super) mod submission_retry;
+mod submission_tests;
+mod waiting_submission_tests;

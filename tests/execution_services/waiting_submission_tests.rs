@@ -7,12 +7,15 @@
 // =============================================================================
 //! Tests waiting submission and cancellation across execution domains.
 
+use std::future::Future;
 use std::io;
 use std::num::NonZeroUsize;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::Ordering;
 use std::sync::mpsc;
+use std::task::Poll;
 use std::time::Duration;
 
 use qubit_execution_services::ExecutionDomain;
@@ -28,6 +31,10 @@ use tokio::task::yield_now;
 use tokio::test as tokio_test;
 use tokio::time::timeout;
 
+async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+    std::future::poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
+}
+
 struct DropCounter(Arc<AtomicUsize>);
 
 impl Drop for DropCounter {
@@ -37,7 +44,7 @@ impl Drop for DropCounter {
 }
 
 #[tokio_test]
-async fn wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
+async fn test_wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
     let runtime = Handle::current();
     let services = ExecutionServices::builder()
         .enable_blocking()
@@ -83,7 +90,7 @@ async fn wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
-async fn waits_for_blocking_capacity_without_recreating_the_task() {
+async fn test_waits_for_blocking_capacity_without_recreating_the_task() {
     let services = ExecutionServices::builder()
         .enable_blocking()
         .blocking_pool_size(1)
@@ -109,7 +116,7 @@ async fn waits_for_blocking_capacity_without_recreating_the_task() {
         Ok::<usize, io::Error>(payload.len())
     });
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     release_tx.send(()).unwrap();
     assert_eq!(
@@ -128,7 +135,7 @@ async fn waits_for_blocking_capacity_without_recreating_the_task() {
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
-async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
+async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
     // CPU domain.
     let services = ExecutionServices::builder()
         .enable_cpu()
@@ -148,7 +155,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let waiting = services.submit_cpu_callable_wait(|| Ok::<usize, io::Error>(42));
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -182,7 +189,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
     let waiting = services.submit_tokio_blocking_callable_wait(|| Ok::<usize, io::Error>(42));
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -214,7 +221,7 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
     yield_now().await;
     let waiting = services.spawn_io_wait(async { Ok::<usize, io::Error>(42) });
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -231,7 +238,39 @@ async fn waits_for_cpu_tokio_blocking_and_io_capacity() {
 }
 
 #[tokio_test]
-async fn disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
+async fn test_wait_prioritizes_shutdown_over_disabled_domain() {
+    let services = ExecutionServices::builder()
+        .enable_cpu()
+        .cpu_threads(1)
+        .build()
+        .expect("CPU-only services should build");
+    services.shutdown();
+
+    let blocking_result = services.submit_blocking_callable_wait(|| Ok::<(), io::Error>(())).await;
+    let cpu_result = services.submit_cpu_callable_wait(|| Ok::<(), io::Error>(())).await;
+    let tokio_blocking_result = services
+        .submit_tokio_blocking_callable_wait(|| Ok::<(), io::Error>(()))
+        .await;
+    let io_result = services.spawn_io_wait(async { Ok::<(), io::Error>(()) }).await;
+
+    for result in [
+        blocking_result.map(|_| ()),
+        cpu_result.map(|_| ()),
+        tokio_blocking_result.map(|_| ()),
+        io_result.map(|_| ()),
+    ] {
+        assert!(matches!(
+            result,
+            Err(ExecutionServicesSubmissionError::Rejected {
+                source: SubmissionError::Shutdown,
+            })
+        ));
+    }
+    services.await_termination().await;
+}
+
+#[tokio_test]
+async fn test_disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     let disabled = ExecutionServices::builder()
         .enable_blocking()
         .blocking_pool_size(1)
@@ -281,7 +320,7 @@ async fn disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
         Ok::<(), io::Error>(())
     });
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     services.shutdown();
     let result = timeout(Duration::from_secs(1), waiting).await.unwrap();
     assert!(matches!(
@@ -296,7 +335,7 @@ async fn disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
 }
 
 #[tokio_test]
-async fn cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
+async fn test_cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
     let services = ExecutionServices::builder()
         .enable_io()
         .runtime(Handle::current())
@@ -317,7 +356,7 @@ async fn cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
         let _drop_counter = drop_counter;
         Ok::<(), io::Error>(())
     }));
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     assert_eq!(drop_count.load(Ordering::SeqCst), 0);
     drop(waiting);
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
@@ -328,7 +367,7 @@ async fn cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
 }
 
 #[tokio_test]
-async fn stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_once() {
+async fn test_stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_once() {
     let services = ExecutionServices::builder()
         .enable_io()
         .runtime(Handle::current())
@@ -351,7 +390,7 @@ async fn stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_onc
         Ok::<(), io::Error>(())
     });
     pin!(waiting);
-    assert!(timeout(Duration::from_millis(20), &mut waiting).await.is_err());
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
     assert_eq!(drop_count.load(Ordering::SeqCst), 0);
 
     let _stop_report = services.stop();
@@ -367,7 +406,7 @@ async fn stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_onc
 }
 
 #[tokio_test]
-async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
+async fn test_two_waiters_compete_for_capacity_without_losing_wakeups() {
     let services = ExecutionServices::builder()
         .enable_io()
         .runtime(Handle::current())
@@ -387,8 +426,8 @@ async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
     let second = services.spawn_io_wait(async { Ok::<usize, io::Error>(2) });
     pin!(first);
     pin!(second);
-    assert!(timeout(Duration::from_millis(20), &mut first).await.is_err());
-    assert!(timeout(Duration::from_millis(20), &mut second).await.is_err());
+    assert!(poll_once(first.as_mut()).await.is_pending());
+    assert!(poll_once(second.as_mut()).await.is_pending());
     release_tx.send(()).unwrap();
     let (first, second) = timeout(Duration::from_secs(1), async { join!(&mut first, &mut second) })
         .await
@@ -398,4 +437,47 @@ async fn two_waiters_compete_for_capacity_without_losing_wakeups() {
     running.await.unwrap();
     services.shutdown();
     services.await_termination().await;
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_io_parent_waiting_on_same_full_domain_remains_pending() {
+    let services = Arc::new(
+        ExecutionServices::builder()
+            .enable_io()
+            .runtime(Handle::current())
+            .io_task_capacity(NonZeroUsize::new(1).expect("capacity is nonzero"))
+            .build()
+            .expect("IO services should build"),
+    );
+    let (pending_tx, pending_rx) = oneshot::channel();
+    let child_services = Arc::clone(&services);
+    let parent = services
+        .spawn_io(async move {
+            let child_wait = child_services.spawn_io_wait(async { Ok::<(), io::Error>(()) });
+            tokio::pin!(child_wait);
+            let first_poll = poll_once(child_wait.as_mut()).await;
+            pending_tx
+                .send(first_poll.is_pending())
+                .expect("test receiver should remain alive");
+            let child = child_wait.await.map_err(io::Error::other)?;
+            child.await.map_err(io::Error::other)
+        })
+        .expect("parent task should be accepted");
+
+    assert!(
+        timeout(Duration::from_secs(1), pending_rx)
+            .await
+            .expect("parent should report the child wait state")
+            .expect("parent should report its state")
+    );
+    assert_eq!(services.snapshot().io.unwrap().accepted_unfinished, 1);
+
+    let _stop_report = services.stop();
+    let _parent_result = timeout(Duration::from_secs(1), parent)
+        .await
+        .expect("stop should release the accepted parent task");
+    timeout(Duration::from_secs(1), services.await_termination())
+        .await
+        .expect("stopped IO service should terminate");
+    assert!(services.is_terminated());
 }

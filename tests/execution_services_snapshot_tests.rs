@@ -14,7 +14,7 @@ use qubit_executor::TaskExecutionError;
 use qubit_executor::service::ExecutorServiceLifecycle;
 
 #[tokio::test]
-async fn snapshot_reports_only_enabled_domains_and_configured_capacities() {
+async fn test_snapshot_reports_only_enabled_domains_and_configured_capacities() {
     let runtime = tokio::runtime::Handle::current();
     let services = ExecutionServices::builder()
         .enable_blocking()
@@ -53,7 +53,7 @@ async fn snapshot_reports_only_enabled_domains_and_configured_capacities() {
 }
 
 #[tokio::test]
-async fn snapshot_uses_none_for_disabled_domains() {
+async fn test_snapshot_uses_none_for_disabled_domains() {
     let services = ExecutionServices::builder()
         .enable_blocking()
         .blocking_pool_size(1)
