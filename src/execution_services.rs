@@ -8,8 +8,10 @@
 mod internal;
 // Coordinates facade-wide shutdown, stop, and termination waits.
 mod lifecycle;
-// Routes submissions to the enabled execution domains.
+// Routes immediate submissions to the enabled execution domains.
 mod submission;
+// Waits for capacity before submitting tasks to enabled domains.
+mod waiting_submission;
 
 use std::sync::Arc;
 

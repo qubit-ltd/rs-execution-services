@@ -14,6 +14,8 @@ use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
 
 use super::facade_intent::FacadeIntent;
+use crate::ExecutionDomain;
+use crate::ExecutionServicesSubmissionError;
 
 /// Locks the aggregate intent, recovering the last recorded value if poisoned.
 ///
@@ -108,6 +110,36 @@ impl ExecutionServicesAdmission {
             return Err(SubmissionError::Shutdown.into());
         }
         submit()
+    }
+
+    /// Resolves an enabled domain after checking the facade admission state.
+    ///
+    /// Shutdown takes precedence over a disabled-domain error. The intent lock
+    /// is released before inspecting the supplied service option.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `S` - Concrete service type owned by an execution domain.
+    ///
+    /// # Parameters
+    ///
+    /// * `domain` - Domain requested by the caller.
+    /// * `service` - Enabled service reference, or `None` when disabled.
+    ///
+    /// # Returns
+    ///
+    /// The service reference when admission is open and the domain is enabled.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Rejected(Shutdown)` when facade admission is closed, or
+    /// `DomainDisabled` when admission is open and the service is absent.
+    pub fn resolve_domain<'a, S>(
+        &self,
+        domain: ExecutionDomain,
+        service: Option<&'a S>,
+    ) -> Result<&'a S, ExecutionServicesSubmissionError> {
+        self.admit(|| service.ok_or(ExecutionServicesSubmissionError::DomainDisabled { domain }))
     }
 
     /// Requests graceful shutdown without downgrading an existing stop.

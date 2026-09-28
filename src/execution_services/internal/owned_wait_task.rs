@@ -13,6 +13,10 @@ use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 /// Holds a task until one submission attempt is accepted and starts executing.
+///
+/// # Type Parameters
+///
+/// * `T` - Callable or future retained across rejected attempts.
 pub(in crate::execution_services) struct OwnedWaitTask<T> {
     /// Shared slot retained by the waiter while rejected attempt wrappers drop.
     task: Arc<Mutex<Option<T>>>,
@@ -40,6 +44,11 @@ impl<T> OwnedWaitTask<T> {
     ///
     /// Rejected wrappers leave the task in the shared slot for the next
     /// attempt. The mutex is released before invoking user code.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - Successful output type produced by the callable.
+    /// * `E` - Error type produced by the callable.
     pub(in crate::execution_services) fn callable_attempt<R, E>(&self) -> impl FnMut() -> Result<R, E> + Send + 'static
     where
         T: FnOnce() -> Result<R, E> + Send + 'static,
@@ -52,6 +61,11 @@ impl<T> OwnedWaitTask<T> {
     ///
     /// Rejected wrappers leave the future in the shared slot for the next
     /// attempt. The mutex is released before polling user code.
+    ///
+    /// # Type Parameters
+    ///
+    /// * `R` - Successful output type produced by the future.
+    /// * `E` - Error type produced by the future.
     pub(in crate::execution_services) fn future_attempt<R, E>(
         &self,
     ) -> impl Future<Output = Result<R, E>> + Send + 'static
@@ -69,9 +83,18 @@ impl<T> OwnedWaitTask<T> {
 ///
 /// * `task` - Shared slot containing the task to execute.
 ///
+/// # Type Parameters
+///
+/// * `T` - One-shot callable or future stored in the slot.
+///
 /// # Returns
 ///
 /// The task removed from the slot.
+///
+/// # Panics
+///
+/// Panics if an accepted wrapper attempts to consume a task that was already
+/// taken, which indicates a violation of the one-shot submission invariant.
 fn take_task<T>(task: &Mutex<Option<T>>) -> T {
     lock_task(task)
         .take()
@@ -83,6 +106,10 @@ fn take_task<T>(task: &Mutex<Option<T>>) -> T {
 /// # Parameters
 ///
 /// * `task` - Shared slot containing the task.
+///
+/// # Type Parameters
+///
+/// * `T` - One-shot callable or future stored in the slot.
 ///
 /// # Returns
 ///

@@ -7,7 +7,9 @@
 // =============================================================================
 //! Public API consumer regression; this fixture is not a production downstream.
 
+use std::future::Future;
 use std::io;
+use std::task::Poll;
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
@@ -51,8 +53,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             captured_polls.fetch_add(1, Ordering::SeqCst);
             Ok::<u8, io::Error>(45)
         });
-        tokio::task::yield_now().await;
+        tokio::pin!(waiting_io);
+        let first_wait_poll = std::future::poll_fn(|context| {
+            Poll::Ready(waiting_io.as_mut().poll(context))
+        })
+        .await;
+        assert!(first_wait_poll.is_pending());
         assert_eq!(future_polls.load(Ordering::SeqCst), 0);
+        assert_eq!(services.snapshot().io.unwrap().accepted_unfinished, 1);
         release_tx.send(()).expect("first IO producer should be released");
         assert_eq!(first_io.await?, 44);
         assert_eq!(waiting_io.await?.await?, 45);
