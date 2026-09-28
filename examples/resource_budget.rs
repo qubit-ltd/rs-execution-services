@@ -7,8 +7,10 @@
 // =============================================================================
 //! Demonstrates independent worker and task-capacity limits per domain.
 
+use std::future::Future;
 use std::io;
 use std::num::NonZeroUsize;
+use std::task::Poll;
 
 use qubit_execution_services::ExecutionServices;
 
@@ -54,7 +56,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         tokio::task::yield_now().await;
         let waiting_value = String::from("one-shot IO task");
         let waiting_io = services.spawn_io_wait(async move { Ok::<usize, io::Error>(waiting_value.len()) });
-        tokio::task::yield_now().await;
+        tokio::pin!(waiting_io);
+        let first_wait_poll = std::future::poll_fn(|context| Poll::Ready(waiting_io.as_mut().poll(context))).await;
+        assert!(first_wait_poll.is_pending());
+        assert_eq!(
+            services.snapshot().io.expect("IO domain enabled").accepted_unfinished,
+            1
+        );
         release_tx.send(()).expect("IO producer should be released");
         assert_eq!(first_io.await?, 44);
         assert_eq!(waiting_io.await?.await?, 16);

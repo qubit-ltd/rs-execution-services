@@ -150,6 +150,78 @@ pub async fn make_daily_report(
 
 报表入口调用 `make_daily_report` 后，成功返回当天总金额（分）；存储接口也已返回成功。读取和汇总分别在独立 worker 上执行，保存的 future 由 Tokio 调度。这里顺序等待每步，因为下一步依赖上一步。闭包和 future 都返回 `Result<R, E>`，捕获的对象须满足对应方法的 `Send` 和生命周期约束。报表应用可随后增加自己的日志、指标和请求响应映射。
 
+### 完整可运行程序
+
+可运行的[每日报表示例](../examples/daily_report.rs)用本地适配函数模拟旧账本和异步存储。金额格式错误或累计溢出会作为任务错误返回；真实应用可以替换为自己的依赖，保留执行域选择和关闭顺序。
+
+```rust
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
+//! Demonstrates reading, calculating, and saving a daily report across domains.
+
+use std::io;
+use qubit_execution_services::ExecutionServices;
+use tokio::runtime::Handle;
+
+struct DailyReport {
+    day: String,
+    total_cents: u64,
+}
+
+fn read_legacy_ledger() -> io::Result<String> {
+    Ok(String::from("120\n230\n"))
+}
+
+fn calculate_daily_report(day: String, entries: String) -> io::Result<DailyReport> {
+    let total_cents = entries.lines().try_fold(0_u64, |total, entry| {
+        let cents = entry.parse::<u64>().map_err(io::Error::other)?;
+        total
+            .checked_add(cents)
+            .ok_or_else(|| io::Error::other("daily total overflow"))
+    })?;
+    Ok(DailyReport { day, total_cents })
+}
+
+async fn save_report(report: DailyReport) -> io::Result<u64> {
+    if report.day.is_empty() {
+        return Err(io::Error::other("report day must not be empty"));
+    }
+    Ok(report.total_cents)
+}
+
+async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> {
+    let services = ExecutionServices::builder()
+        .runtime(runtime)
+        .enable_blocking()
+        .enable_cpu()
+        .enable_io()
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()?;
+
+    let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
+    let report = services
+        .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
+        .await?;
+    let saved = services.spawn_io(async move { save_report(report).await })?.await?;
+    services.shutdown();
+    services.await_termination().await;
+    Ok(saved)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let total_cents = runtime.block_on(run_report(runtime.handle().clone()))?;
+    assert_eq!(total_cents, 350);
+    Ok(())
+}
+```
+
 ## 检查报表结果
 
 | 阶段 | 观察方式 | 成功意味着什么 |
@@ -263,13 +335,17 @@ let save = services.spawn_io_wait(async move {
 Ok(save.await?)
 ```
 
-第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。`submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait` 用法相同。每次等待只接收一个任务，并在重试期间保留它，因此任务至多执行一次。取消等待 future 会停止后续尝试并释放尚未接纳的任务；任务被接纳后由返回的句柄管理。关闭期间等待可能返回 `Shutdown`，应报告给上游而非无限重试。
+第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。另外三个方法是 `submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait`。这些 wait 方法是惰性 future，第一次被 poll 时才提交；开始首次尝试前会先订阅容量变化。通知只提示重新尝试，不会替某个等待者预留名额，因此不保证 FIFO、公平性或等待时间上限。
+
+facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
+
+三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。IO 容量为 1 时，若父任务在 IO 域内等待同域子任务，父任务会占着唯一容量而子任务无法获接纳；应把编排逻辑放在该域外，或明确分析依赖深度并设置容量和超时。
 
 用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 
 ### Tokio runtime 的归属
 
-builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。提交到未启用域会返回 `ExecutionServicesSubmissionError::DomainDisabled`；底层域拒绝任务时会返回 `ExecutionServicesSubmissionError::Rejected`。
+builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，所有提交优先返回 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`，也包括未启用域。启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
 
 ### 有序关闭与强制停止
 
@@ -296,7 +372,7 @@ assert!(services.is_terminated());
 ## 错误与诊断
 
 - `ExecutionServicesBuilder::build()` 在没有启用域时返回 `NoDomains`；对未启用域设置配置时返回 `ConfigurationForDisabledDomain`；启用 Tokio 域却未设置 runtime 时返回 `MissingTokioRuntime`；启用的 blocking 或 CPU builder 配置无效时返回对应错误。
-- 提交未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。facade 关闭或已启用域拒绝任务时返回 `ExecutionServicesSubmissionError::Rejected`，其中保留底层 `SubmissionError`，例如 `Shutdown` 或 `Saturated`。
+- 准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，提交优先返回 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`；已启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
 - 检查关闭结果时，读取 `ExecutionServicesStopReport` 中各启用域的 `Option<StopReport>`；该类型不提供跨域总数。
 
@@ -324,3 +400,5 @@ assert!(services.is_terminated());
 - [中文 README](../README.zh_CN.md) 与 [English README](../README.md)
 - [API 文档](https://docs.rs/qubit-execution-services)
 - [English user guide](user_guide.md)
+- [设计文档](design.zh_CN.md) 与 [Design documents](design.md)
+- [每日报表示例](../examples/daily_report.rs)

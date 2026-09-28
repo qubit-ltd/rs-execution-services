@@ -196,6 +196,78 @@ When `make_daily_report` returns `Ok(total_cents)`, the store's `save` future ha
 
 If reading, totaling, or saving fails, handle the submission error or task error at that stage. A task may have caused an external side effect before it returns an error, so compensation depends on the legacy system and store. If saving fails and the application retries the whole function, it reads the legacy system again; the source data may have changed. Use an idempotency key, a captured input snapshot, or an overwrite policy if the business contract requires it. This crate does not provide a transaction across these steps or automatically retry them.
 
+### Complete runnable program
+
+The runnable [`daily_report` example](../examples/daily_report.rs) uses local adapters to stand in for a legacy ledger and an async store. Its calculation returns an error for invalid amounts or overflow; a real application replaces those adapters with its own dependencies while keeping the domain routing and shutdown order.
+
+```rust
+// =============================================================================
+//    Copyright (c) 2025 - 2026 Haixing Hu.
+//
+//    SPDX-License-Identifier: Apache-2.0
+//
+//    Licensed under the Apache License, Version 2.0.
+// =============================================================================
+//! Demonstrates reading, calculating, and saving a daily report across domains.
+
+use std::io;
+use qubit_execution_services::ExecutionServices;
+use tokio::runtime::Handle;
+
+struct DailyReport {
+    day: String,
+    total_cents: u64,
+}
+
+fn read_legacy_ledger() -> io::Result<String> {
+    Ok(String::from("120\n230\n"))
+}
+
+fn calculate_daily_report(day: String, entries: String) -> io::Result<DailyReport> {
+    let total_cents = entries.lines().try_fold(0_u64, |total, entry| {
+        let cents = entry.parse::<u64>().map_err(io::Error::other)?;
+        total
+            .checked_add(cents)
+            .ok_or_else(|| io::Error::other("daily total overflow"))
+    })?;
+    Ok(DailyReport { day, total_cents })
+}
+
+async fn save_report(report: DailyReport) -> io::Result<u64> {
+    if report.day.is_empty() {
+        return Err(io::Error::other("report day must not be empty"));
+    }
+    Ok(report.total_cents)
+}
+
+async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> {
+    let services = ExecutionServices::builder()
+        .runtime(runtime)
+        .enable_blocking()
+        .enable_cpu()
+        .enable_io()
+        .blocking_pool_size(1)
+        .cpu_threads(1)
+        .build()?;
+
+    let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
+    let report = services
+        .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
+        .await?;
+    let saved = services.spawn_io(async move { save_report(report).await })?.await?;
+    services.shutdown();
+    services.await_termination().await;
+    Ok(saved)
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let total_cents = runtime.block_on(run_report(runtime.handle().clone()))?;
+    assert_eq!(total_cents, 350);
+    Ok(())
+}
+```
+
 Use runnable submission methods such as `submit_blocking` when the caller only needs to know that work was accepted. Use callable methods when the result matters, and `submit_tracked_*` variants when status or cancellation is needed. The [Errors and Diagnostics](#errors-and-diagnostics) and [Troubleshooting](#troubleshooting) sections cover common failure signals.
 
 ## Core Workflow
@@ -262,7 +334,11 @@ For a complete configuration that separates pool sizes from task capacities, see
 
 ### Waiting for capacity and monitoring
 
-The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods accept one callable or future and retain that same task while retrying after capacity or lifecycle notifications. The task runs at most once. Cancelling the wait future stops further attempts and drops an unaccepted task; after acceptance, use the returned task handle to control the task.
+The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods are lazy futures: they do no submission until first polled. They retain one callable or future across attempts, subscribing to capacity changes before the first attempt. Capacity notifications are advisory, so a competing submitter can use the available slot first. No FIFO, fairness, or bounded-wait guarantee is provided.
+
+When the facade is running, a disabled domain returns `DomainDisabled`; after shutdown or stop closes admission, every submission returns `Rejected { source: Shutdown }`, including wait calls targeting a disabled domain. An immediate submission to a full enabled domain returns `Rejected { source: Saturated }`; a wait call retries after a capacity notification. Dropping a wait future before acceptance drops its unaccepted task. These pending tasks are not counted by domain task capacity or `snapshot().accepted_unfinished`; limit the number of concurrent waiters or apply application-level timeouts when memory must be bounded.
+
+After acceptance, the three synchronous wait methods return `TaskHandle`, which reports completion but has no `cancel()` method. Dropping that result handle does not cancel the task. The IO wait method returns `TokioTaskHandle`; its cancellation requests abort and may race normal completion. Started synchronous work cannot be forcibly interrupted. A capacity-1 IO task that waits for a child submitted to the same full IO domain can deadlock; keep orchestration outside that domain or size and bound the dependency graph deliberately.
 
 Size capacities from measurements. Record peak arrival rate, task service time, and the maximum queue delay the application can tolerate. Estimate each domain's in-flight demand from arrival rate multiplied by service time, then add a documented burst margin. For blocking work, size worker counts for simultaneous blocking calls and size the finite queue separately for the permitted backlog. For CPU work, start from available parallelism and bound accepted in-flight work to limit queued memory and delay. For Tokio blocking work, configure the facade's accepted-task capacity separately from the runtime's shared `max_blocking_threads`; account for other users of that runtime pool. For IO, estimate concurrent futures and their retained memory. Load test the chosen limits, inspect per-domain snapshots and `Saturated` results, and adjust from observed latency and backlog. Snapshots are observational samples and do not reserve admission capacity.
 
@@ -270,7 +346,7 @@ Size capacities from measurements. Record peak arrival rate, task service time, 
 
 ### Tokio runtime ownership
 
-The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. A submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`; a domain rejection is returned as `ExecutionServicesSubmissionError::Rejected`.
+The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. While the facade is running, a submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`. Once shutdown or stop closes admission, `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }` takes precedence, including for disabled domains. Rejections from enabled domains preserve their native reason such as `Saturated`.
 
 ### Graceful shutdown and abrupt stop
 
@@ -291,7 +367,7 @@ Use the facade when an application needs one owner to submit work to and close s
 ## Errors and Diagnostics
 
 - `ExecutionServicesBuilder::build()` returns `NoDomains` when no domain is enabled, `ConfigurationForDisabledDomain` when options were supplied for a disabled domain, `MissingTokioRuntime` when an enabled Tokio domain lacks a runtime, or a `Blocking`/`Cpu` error when the corresponding enabled builder rejects its configuration.
-- Submission methods return `ExecutionServicesSubmissionError::DomainDisabled` for a disabled domain. Rejections from the facade gate or an enabled domain are wrapped in `ExecutionServicesSubmissionError::Rejected`, which retains the underlying `SubmissionError` such as `Shutdown` or `Saturated`.
+- While admission is open, submissions to disabled domains return `ExecutionServicesSubmissionError::DomainDisabled`. After shutdown or stop closes admission, submissions return `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }` first. Enabled-domain errors such as `Saturated` are preserved in `Rejected`.
 - Once accepted, the task's result is obtained through its handle. A task's own error value is distinct from a submission error; inspect both layers rather than treating successful submission as successful completion.
 - Inspect each enabled domain's `Option<StopReport>` directly; there are no aggregate totals.
 
@@ -319,3 +395,5 @@ Use the facade when an application needs one owner to submit work to and close s
 - [README](../README.md) and [中文 README](../README.zh_CN.md)
 - [API documentation](https://docs.rs/qubit-execution-services)
 - [中文用户手册](user_guide.zh_CN.md)
+- [Design documents](design.md) and [设计文档](design.zh_CN.md)
+- [Daily report example](../examples/daily_report.rs)
