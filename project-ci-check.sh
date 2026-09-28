@@ -7,3 +7,7 @@ CARGO_TARGET_DIR="$project_root/target/project-hook" \
     cargo run --locked --manifest-path \
     "$project_root/tests/fixtures/application_consumer/Cargo.toml"
 printf '%s\n' 'application-consumer: passed'
+CARGO_TARGET_DIR="$project_root/target/project-hook-documentation" \
+    cargo run --locked --manifest-path \
+    "$project_root/tests/fixtures/documentation_consumer/Cargo.toml"
+printf '%s\n' 'documentation-consumer: passed'

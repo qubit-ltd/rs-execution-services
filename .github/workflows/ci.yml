@@ -81,6 +81,39 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  ioc-integration:
+    name: IoC application integration
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+        working-directory: rs-execution-services
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: rs-execution-services
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-ioc
+          ref: 762660f56e425a5b1b442528a9f979a2c41a1a9d
+          path: rs-ioc
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-event-bus
+          ref: bf7ab432947070e6e8bbc6ffe02560eb1957ad27
+          path: rs-event-bus
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-registry
+          ref: d3a6cacbc05bea970175db9cf6211680aa39c87c
+          path: rs-fs-registry
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94
+          components: clippy
+      - name: Run pinned IoC consumer integration
+        run: ./ioc-ci-check.sh
+
   feature-matrix:
     runs-on: ubuntu-latest
     steps:
