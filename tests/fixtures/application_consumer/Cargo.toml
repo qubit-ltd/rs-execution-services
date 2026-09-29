@@ -7,3 +7,5 @@ publish = false
 [dependencies]
 qubit-execution-services = { path = "../../.." }
 tokio = { version = "^1.53", features = ["rt-multi-thread", "time"] }
+
+[workspace]

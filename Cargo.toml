@@ -40,3 +40,5 @@ qubit-thread-pool = { version = "0.11", features = ["async-wait"] }
 
 [dev-dependencies]
 tokio = { version = "^1.53", features = ["macros", "rt-multi-thread", "time"] }
+
+[workspace]
