@@ -95,24 +95,45 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-ioc
-          ref: 27f9ea43550fcaaf321cce33a1917348d0b44fd3
+          ref: 7c1133567242eb8192842b83cd34baf732de145d
           path: rs-ioc
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-event-bus
-          ref: 96e7422af3fc5c12ddc46ac623d3218b75a0c7f4
+          ref: 2a68b804bcf0fceae174a7707b94e53717332128
           path: rs-event-bus
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-fs-registry
-          ref: d3a6cacbc05bea970175db9cf6211680aa39c87c
+          ref: 8e8940cc295b0e277241c397bea559214a272fb5
           path: rs-fs-registry
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-local
+          ref: 7f0959f15355d3be97c681f588f0ab23ce8d40d1
+          path: rs-fs-local
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs
+          ref: 4bc4d9e430719d56429f65224a112d640af51478
+          path: rs-fs
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
-          toolchain: 1.94
+          toolchain: 1.94.0
           components: clippy
       - name: Install Clippy for IoC consumer checks
         run: rustup component add clippy --toolchain 1.94.0
+      - name: Record exact IoC consumer sources
+        run: |
+          for repository in rs-execution-services rs-ioc rs-event-bus rs-fs-registry rs-fs-local rs-fs; do
+            git -C "../$repository" rev-parse HEAD
+          done
+          rustc +1.94.0 --version --verbose
+          cargo +1.94.0 --version
+          sha256sum "$(rustup which --toolchain 1.94.0 rustc)"
+          sha256sum tests/fixtures/ioc_application_consumer/Cargo.lock
+          sha256sum tests/fixtures/ioc_application_consumer/src/*.rs
+          sha256sum tests/fixtures/ioc_application_consumer/tests/*.rs tests/fixtures/ioc_application_consumer/tests/internal/*.rs
       - name: Run pinned IoC consumer integration
         run: ./ioc-ci-check.sh
 
