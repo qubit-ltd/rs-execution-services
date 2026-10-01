@@ -8,7 +8,7 @@ publish = false
 name = "ioc_application_consumer"
 
 [dependencies]
-qubit-ioc = { path = "../../../../rs-ioc", version = "0.3.0" }
+qubit-ioc = { path = "../../../../rs-ioc", version = "0.3.0", default-features = false }
 qubit-execution-services = { path = "../../..", version = "0.10" }
 qubit-event-bus = { path = "../../../../rs-event-bus", version = "0.18.0" }
 qubit-fs-registry = { path = "../../../../rs-fs-registry", version = "0.7" }

@@ -16,7 +16,9 @@ cargo +1.94.0 test --manifest-path tests/fixtures/ioc_application_consumer/Cargo
 ```
 
 `build_application` creates an IoC `Application` with a bounded `WaitPolicy`
-and a real local `EventBus`. It registers `EventBusRegistry`,
+and a real local `EventBus`. The example uses `bounded_with_total` with a 90
+second application budget in addition to its per-component budgets; this is a
+fixture value, not a universal production recommendation. It registers `EventBusRegistry`,
 `ExecutionServices`, and a `FlushWorker` that depends on both resources. The
 worker owns a typed subscription. It also creates `report.csv` under a
 caller-owned temporary root, registers a rooted `LocalFileSystemProvider`, and
@@ -56,11 +58,21 @@ The external tests cover real graceful flush, real rooted Fs resolution,
 Immediate cancellation of a running IO task, missing dependencies, explicit
 build-failure cleanup, cancelled async build, blocked EventBus handler with
 nonblocking requests and a resumed wait, plus injected grace and termination
-budgets. A report with `incomplete` entries means termination was not
+budgets and an application-wide timeout. The total timer starts on the first
+poll of `wait()`, survives cancellation, and is reported via
+`ShutdownReport::overall_failure()`. A report with `incomplete` entries means termination was not
 confirmed, not that resources were killed. After a termination timeout,
 shutdown continues to later dependencies; an unfinished consumer may lose
 those dependencies. The tests use bounded guards to detect hangs; a timeout
 cannot interrupt arbitrary blocking code.
+
+The EventBus adapter is fixture-specific. Its request callback must return
+without blocking and retain the returned shutdown ticket across cancelled
+waits. The wait callback takes the ticket while holding the state lock, releases
+the lock, then observes it asynchronously. An Immediate upgrade requests
+stronger shutdown without discarding an already observed ticket. Keep the Tokio
+runtime alive until shutdown finishes; neither IoC nor the adapter can interrupt
+blocking synchronous callbacks.
 
 The historical lane under `rs-ioc/tests/fixtures/application_consumer` uses
 its original pinned EventBus 0.15 source and only four migrated public-API
