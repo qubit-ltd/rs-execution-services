@@ -86,7 +86,7 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
                 },
             )
             .expect("subscription");
-        bus.publish(PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"))
+        let _ = bus.publish(PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"))
             .expect("publish");
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
