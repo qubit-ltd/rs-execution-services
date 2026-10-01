@@ -18,6 +18,9 @@ use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use ioc_application_consumer::managed_execution_services::managed_execution_services;
+use ioc_application_consumer::managed_event_bus::managed_event_bus;
+use qubit_event_bus::EventBus;
+use qubit_event_bus::local::LocalEventBusConfig;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesSubmissionError;
 use qubit_ioc::BindingKey;
@@ -65,6 +68,15 @@ fn runtime() -> Runtime {
 /// Registers the production fixture adapter with manually controlled deadlines.
 fn builder(runtime: Handle, timers: &Timers) -> ContainerBuilder {
     let mut builder = ContainerBuilder::new().wait_policy(timers.policy());
+    builder
+        .register_managed_factory::<ExecutionServices, _>(&[], move |_| managed_execution_services(runtime))
+        .expect("register real execution services adapter");
+    builder
+}
+
+/// Registers the production adapter with an application-wide shutdown budget.
+fn builder_with_total(runtime: Handle, timers: &Timers, total: Duration) -> ContainerBuilder {
+    let mut builder = ContainerBuilder::new().wait_policy(timers.policy_with_total(total));
     builder
         .register_managed_factory::<ExecutionServices, _>(&[], move |_| managed_execution_services(runtime))
         .expect("register real execution services adapter");
@@ -262,5 +274,67 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
         assert_eq!(starts.load(Ordering::SeqCst), 1);
         assert_eq!(graceful_requests.load(Ordering::SeqCst), 1);
         assert_eq!(aborts.load(Ordering::SeqCst), 0);
+    });
+}
+
+/// The application-wide deadline aborts real services and is retained in the
+/// public shutdown report.
+#[test]
+fn test_total_timeout_aborts_execution_services_and_is_reported() {
+    let runtime = runtime();
+    runtime.block_on(async {
+        let timers = Timers::default();
+        let bus = Arc::new(EventBus::local(LocalEventBusConfig::new()).expect("local EventBus"));
+        let observed_bus = Arc::clone(&bus);
+        let mut builder = builder_with_total(
+            runtime.handle().clone(),
+            &timers,
+            Duration::from_secs(19),
+        );
+        builder
+            .register_managed_factory::<EventBus, _>(&[], move |_| {
+                Ok(managed_event_bus(bus))
+            })
+            .expect("register EventBus lifecycle adapter");
+        let application = builder
+            .build_all()
+            .expect("build execution services application");
+        let services = application.context().get::<ExecutionServices>().expect("services");
+        let (started_tx, started_rx) = oneshot::channel();
+        let (ended_tx, ended_rx) = oneshot::channel();
+        let task = services
+            .spawn_io(async move {
+                let _guard = TaskGuard { ended: Some(ended_tx) };
+                started_tx.send(()).expect("startup receiver alive");
+                std::future::pending::<()>().await;
+                Ok::<(), io::Error>(())
+            })
+            .expect("submit real pending IO task");
+        guarded(started_rx).await.expect("task has started");
+        let mut shutdown = application.begin_shutdown(ShutdownMode::Graceful);
+        assert!(poll_once(shutdown.wait()).is_pending());
+        assert_eq!(timers.durations(), [Duration::from_secs(19), Duration::from_secs(13)]);
+        assert!(poll_once(shutdown.wait()).is_pending());
+        assert_eq!(timers.durations(), [Duration::from_secs(19), Duration::from_secs(13)]);
+
+        timers.trigger(0);
+        let error = guarded(shutdown.wait()).await.expect_err("total deadline recorded");
+        guarded(ended_rx).await.expect("aborted task released its guard");
+        assert!(guarded(task).await.is_err(), "aborted IO task cannot succeed");
+        assert!(services.is_terminated());
+        assert!(error.report().overall_failure().is_some());
+        assert!(!error.report().is_success());
+        assert_eq!(error.report().mode(), ShutdownMode::Graceful);
+        assert!(error
+            .report()
+            .incomplete()
+            .contains(&BindingKey::of::<EventBus>(None)));
+        let ticket = observed_bus
+            .request_shutdown(qubit_event_bus::spi::ShutdownMode::Immediate)
+            .expect("retrieve the same EventBus shutdown generation");
+        let report = guarded(ticket.wait_async())
+            .await
+            .expect("EventBus completes after the Immediate upgrade");
+        assert_eq!(report.outcome, qubit_event_bus::spi::ShutdownOutcome::Complete);
     });
 }
