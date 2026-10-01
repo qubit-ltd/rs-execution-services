@@ -86,6 +86,24 @@ impl Timers {
         })
     }
 
+    /// Returns per-component and total budgets, recording each created timer.
+    pub fn policy_with_total(&self, total: Duration) -> WaitPolicy {
+        let timers = self.clone();
+        WaitPolicy::bounded_with_total(
+            Duration::from_secs(13),
+            Duration::from_secs(7),
+            total,
+            move |duration| {
+                let gate = Gate::default();
+                timers.calls.lock().expect("timers lock").push(TimerCall {
+                    duration,
+                    gate: gate.clone(),
+                });
+                Box::pin(gate)
+            },
+        )
+    }
+
     /// Returns requested budgets in creation order for cancellation assertions.
     pub fn durations(&self) -> Vec<Duration> {
         self.calls

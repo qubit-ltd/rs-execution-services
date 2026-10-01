@@ -24,7 +24,6 @@ use qubit_fs_local::LocalResourcePolicy;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::Application;
 use qubit_ioc::ContainerBuilder;
-use qubit_ioc::Dependency;
 use qubit_ioc::FactoryError;
 use qubit_ioc::WaitPolicy;
 use tokio::runtime::Handle;
@@ -50,31 +49,25 @@ pub fn build_application(runtime: Handle, root: &Path) -> Result<Application, Bo
         root,
         policy,
     )?)?;
-    let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::bounded(
+    let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::bounded_with_total(
         Duration::from_secs(30),
         Duration::from_secs(30),
+        Duration::from_secs(90),
         |duration| Box::pin(tokio::time::sleep(duration)),
     ));
     builder.register_instance(Arc::new(registry))?;
-    builder.register_managed_factory::<ExecutionServices, _>(&[], move |_| managed_execution_services(runtime))?;
-    builder.register_factory::<EventBusRegistry, _>(&[], |_| {
+    builder.register_injected_managed_factory::<ExecutionServices, (), _>(|()| managed_execution_services(runtime))?;
+    builder.register_injected_factory::<EventBusRegistry, (), _>(|()| {
         let registry = EventBusRegistry::with_local().map_err(FactoryError::new)?;
         registry.seal();
         Ok(Arc::new(registry))
     })?;
-    builder.register_managed_factory::<EventBus, _>(&[Dependency::of::<EventBusRegistry>()], |context| {
-        let registry = context.get::<EventBusRegistry>().map_err(FactoryError::new)?;
+    builder.register_injected_managed_factory::<EventBus, (Arc<EventBusRegistry>,), _>(|(registry,)| {
         let bus = registry.create(&EventBusConfig::default()).map_err(FactoryError::new)?;
         Ok(managed_event_bus(Arc::new(bus)))
     })?;
-    builder.register_managed_factory::<FlushWorker, _>(
-        &[Dependency::of::<ExecutionServices>(), Dependency::of::<EventBus>()],
-        |context| {
-            FlushWorker::managed(
-                context.get::<ExecutionServices>().map_err(FactoryError::new)?,
-                context.get::<EventBus>().map_err(FactoryError::new)?,
-            )
-        },
+    builder.register_injected_managed_factory::<FlushWorker, (Arc<ExecutionServices>, Arc<EventBus>), _>(
+        |(services, bus)| FlushWorker::managed(services, bus),
     )?;
     builder.root::<FlushWorker>();
     builder.root::<FileSystemRegistry>();
