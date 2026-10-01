@@ -8,8 +8,6 @@
 //! Nonblocking EventBus requests with one retained shutdown observer.
 use std::sync::Arc;
 use std::sync::Mutex;
-use std::sync::atomic::AtomicBool;
-use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use qubit_event_bus::EventBus;
@@ -18,22 +16,26 @@ use qubit_event_bus::spi::ShutdownMode;
 use qubit_ioc::CleanupError;
 use qubit_ioc::Managed;
 
+#[derive(Default)]
+struct AdapterState {
+    ticket: Option<EventBusShutdown>,
+    wait_started: bool,
+}
+
 /// Adapts an existing bus. Requests preserve errors and never block for
 /// handlers. A cancellation of the IoC wait leaves its owned ticket future
 /// resumable.
 pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
-    let ticket = Arc::new(Mutex::new(None::<EventBusShutdown>));
-    let active = Arc::new(AtomicBool::new(false));
-    let abort_ticket = Arc::clone(&ticket);
-    let abort_active = Arc::clone(&active);
-    let graceful_ticket = Arc::clone(&ticket);
+    let state = Arc::new(Mutex::new(AdapterState::default()));
+    let abort_state = Arc::clone(&state);
+    let graceful_state = Arc::clone(&state);
     Managed::new(bus, move |bus| {
         let requested = bus
             .request_shutdown(ShutdownMode::Immediate)
             .map_err(CleanupError::new)?;
-        let mut slot = abort_ticket.lock().expect("shutdown ticket lock");
-        if slot.is_none() && !abort_active.load(Ordering::SeqCst) {
-            *slot = Some(requested);
+        let mut state = abort_state.lock().expect("shutdown ticket lock");
+        if !state.wait_started && state.ticket.is_none() {
+            state.ticket = Some(requested);
         }
         Ok(())
     })
@@ -43,13 +45,18 @@ pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
                 timeout: Duration::from_secs(30),
             })
             .map_err(CleanupError::new)?;
-        *graceful_ticket.lock().expect("shutdown ticket lock") = Some(requested);
+        let mut state = graceful_state.lock().expect("shutdown ticket lock");
+        if !state.wait_started {
+            state.ticket = Some(requested);
+        }
         Ok(())
     })
     .with_wait(move |_| {
-        let mut slot = ticket.lock().expect("shutdown ticket lock");
-        active.store(true, Ordering::SeqCst);
-        let observer = slot.take();
+        let observer = {
+            let mut state = state.lock().expect("shutdown ticket lock");
+            state.wait_started = true;
+            state.ticket.take()
+        };
         Box::pin(async move {
             let observer =
                 observer.ok_or_else(|| CleanupError::new(std::io::Error::other("missing EventBus shutdown ticket")))?;

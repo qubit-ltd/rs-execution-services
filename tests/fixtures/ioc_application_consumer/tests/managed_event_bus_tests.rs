@@ -22,7 +22,7 @@ use qubit_event_bus::model::PublishRequest;
 use qubit_event_bus::model::SubscribeRequest;
 use qubit_event_bus::model::Topic;
 use qubit_ioc::ContainerBuilder;
-use qubit_ioc::ShutdownMode;
+use qubit_ioc::ShutdownMode as IocShutdownMode;
 use qubit_ioc::WaitPolicy;
 use tokio::runtime::Builder;
 use tokio::sync::oneshot;
@@ -98,7 +98,7 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
             .expect("bus adapter");
         let application = builder.build_all().expect("application");
         let request_task = runtime.spawn(async move {
-            let mut shutdown = application.begin_shutdown(ShutdownMode::Graceful);
+            let mut shutdown = application.begin_shutdown(IocShutdownMode::Graceful);
             assert!(
                 pin!(shutdown.wait())
                     .as_mut()
@@ -132,6 +132,8 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
             .expect("shutdown guard")
             .expect("same generation completes");
         assert!(report.is_success());
+        assert_eq!(report.mode(), IocShutdownMode::Graceful);
+        assert!(report.failures().is_empty());
         assert_eq!(ended_rx.recv().await.as_deref(), Some("real payload"));
     });
 }
