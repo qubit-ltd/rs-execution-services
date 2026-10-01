@@ -13,6 +13,7 @@ use std::sync::atomic::Ordering;
 
 use qubit_event_bus::EventBus;
 use qubit_event_bus::Subscription;
+use qubit_event_bus::model::AdmissionRequirement;
 use qubit_event_bus::model::PublishRequest;
 use qubit_event_bus::model::SubscribeRequest;
 use qubit_event_bus::model::Topic;
@@ -92,7 +93,8 @@ impl FlushWorker {
                         .spawn_io(async move {
                             let request = PublishRequest::new(topic, "final-report:22".to_owned())
                                 .map_err(std::io::Error::other)?;
-                            bus.publish(request).map_err(std::io::Error::other)?;
+                            let _ = bus.publish_checked(request, AdmissionRequirement::AtLeastOneAccepted)
+                                .map_err(std::io::Error::other)?;
                             Ok::<u64, std::io::Error>(22)
                         })
                         .map_err(CleanupError::new)?;
@@ -102,10 +104,10 @@ impl FlushWorker {
                         worker.receiver.lock().expect("receiver lock").take().ok_or_else(|| {
                             CleanupError::new(std::io::Error::other("final receiver already consumed"))
                         })?;
-                    let message = receiver
-                        .recv()
+                    let message = tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
                         .await
-                        .ok_or_else(|| CleanupError::new(std::io::Error::other("final handler did not acknowledge")))?;
+                        .map_err(|_| CleanupError::new(std::io::Error::other("final handler wait timed out")))?
+                        .ok_or_else(|| CleanupError::new(std::io::Error::other("final handler channel closed")))?;
                     worker.received.lock().expect("messages lock").push(message);
                     Ok(())
                 })
