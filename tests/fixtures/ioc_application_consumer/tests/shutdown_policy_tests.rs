@@ -153,12 +153,11 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
             .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
-                Ok(Managed::new(Arc::new(WaitingConsumer), move |_| {
+                Ok(Managed::asynchronous(Arc::new(WaitingConsumer), move |_| {
                     observed_aborts.fetch_add(1, Ordering::SeqCst);
                     Ok(())
-                })
-                .with_graceful_stop(|_| Ok(()))
-                .with_wait(|_| Box::pin(std::future::pending())))
+                }, |_| Box::pin(std::future::pending()))
+                .with_graceful_stop(|_| Ok(())))
             })
             .expect("register pending dependent consumer");
         let application = builder.build_all().expect("build dependency graph");
@@ -236,20 +235,19 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
             .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
-                Ok(Managed::new(Arc::new(WaitingConsumer), move |_| {
+                Ok(Managed::asynchronous(Arc::new(WaitingConsumer), move |_| {
                     observed_aborts.fetch_add(1, Ordering::SeqCst);
                     Ok(())
-                })
-                .with_graceful_stop(move |_| {
-                    observed_graceful.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
-                })
-                .with_wait(move |_| {
+                }, move |_| {
                     observed_starts.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async move {
                         waiting.await;
                         Ok(())
                     })
+                })
+                .with_graceful_stop(move |_| {
+                    observed_graceful.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
                 }))
             })
             .expect("register resumable consumer");

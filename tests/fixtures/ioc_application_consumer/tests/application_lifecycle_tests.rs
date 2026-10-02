@@ -118,10 +118,13 @@ fn test_event_bus_missing_registry_prevents_factory_execution() {
                     .map_err(FactoryError::new)?,
             );
             *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
-            Ok(Managed::new(services, |services| {
+            Ok(Managed::asynchronous(services, |services| {
                 let _stop_report = services.stop();
                 Ok(())
-            }))
+            }, |services| Box::pin(async move {
+                services.await_termination().await;
+                Ok(())
+            })))
         })
         .expect("register managed execution services");
     builder
@@ -175,12 +178,11 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
                         .map_err(FactoryError::new)?,
                 );
                 *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
-                Ok(Managed::new(services, move |services| {
+                Ok(Managed::asynchronous(services, move |services| {
                     stop_count.fetch_add(1, Ordering::SeqCst);
                     let _stop_report = services.stop();
                     Ok(())
-                })
-                .with_wait(move |services| {
+                }, move |services| {
                     wait_count.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async move {
                         services.await_termination().await;
@@ -283,12 +285,11 @@ fn test_cancelling_async_build_stops_managed_execution_services_once() {
                         .map_err(FactoryError::new)?,
                 );
                 *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
-                Ok(Managed::new(services, move |services| {
+                Ok(Managed::asynchronous(services, move |services| {
                     stop_count.fetch_add(1, Ordering::SeqCst);
                     let _stop_report = services.stop();
                     Ok(())
-                })
-                .with_wait(move |services| {
+                }, move |services| {
                     wait_count.fetch_add(1, Ordering::SeqCst);
                     Box::pin(async move {
                         services.await_termination().await;
@@ -372,12 +373,11 @@ fn test_build_failure_stops_an_already_created_managed_resource() {
                     .map_err(FactoryError::new)?,
             );
             *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
-            Ok(Managed::new(services, move |services| {
+            Ok(Managed::asynchronous(services, move |services| {
                 stop_count.fetch_add(1, Ordering::SeqCst);
                 let _stop_report = services.stop();
                 Ok(())
-            })
-            .with_wait(move |services| {
+            }, move |services| {
                 wait_count.fetch_add(1, Ordering::SeqCst);
                 Box::pin(async move {
                     services.await_termination().await;
