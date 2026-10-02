@@ -49,6 +49,11 @@ Managed `ExecutionServices` uses `shutdown()` for a graceful request,
 The EventBus adapter calls nonblocking `request_shutdown`: its shared ticket
 slot preserves a graceful ticket when Immediate strengthens that shutdown,
 and its wait future calls `ticket.wait_async()` after releasing the slot lock.
+The `FlushWorker` also uses an asynchronous managed adapter: its wait owns the
+final task and handler acknowledgement. All three actual resources provide a
+wait callback because returning from their stop request does not confirm that
+termination or the final flush has completed. Keep the Tokio runtime alive
+until these waits finish, including when awaiting build-failure cleanup.
 The synchronous `EventBus::shutdown`, including Immediate, waits for handler,
 worker, and provider completion, so it cannot serve as an IoC abort callback.
 Cancelling an observation does not resend the request or cancel background bus

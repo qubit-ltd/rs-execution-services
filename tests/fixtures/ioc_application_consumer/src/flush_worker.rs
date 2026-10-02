@@ -72,12 +72,7 @@ impl FlushWorker {
             result: Mutex::new(None),
             graceful: AtomicUsize::new(0),
         });
-        Ok(Managed::new(worker, |_| Ok(()))
-            .with_graceful_stop(|worker| {
-                worker.graceful.fetch_add(1, Ordering::SeqCst);
-                Ok(())
-            })
-            .with_wait(|worker| {
+        Ok(Managed::asynchronous(worker, |_| Ok(()), |worker| {
                 Box::pin(async move {
                     if worker.graceful_requests() == 0 {
                         return Ok(());
@@ -111,6 +106,10 @@ impl FlushWorker {
                     worker.received.lock().expect("messages lock").push(message);
                     Ok(())
                 })
+            })
+            .with_graceful_stop(|worker| {
+                worker.graceful.fetch_add(1, Ordering::SeqCst);
+                Ok(())
             }))
     }
 }

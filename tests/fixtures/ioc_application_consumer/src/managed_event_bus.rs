@@ -29,7 +29,7 @@ pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
     let state = Arc::new(Mutex::new(AdapterState::default()));
     let abort_state = Arc::clone(&state);
     let graceful_state = Arc::clone(&state);
-    Managed::new(bus, move |bus| {
+    Managed::asynchronous(bus, move |bus| {
         let requested = bus
             .request_shutdown(ShutdownMode::Immediate)
             .map_err(CleanupError::new)?;
@@ -38,6 +38,17 @@ pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
             state.ticket = Some(requested);
         }
         Ok(())
+    }, move |_| {
+        let observer = {
+            let mut state = state.lock().expect("shutdown ticket lock");
+            state.wait_started = true;
+            state.ticket.take()
+        };
+        Box::pin(async move {
+            let observer =
+                observer.ok_or_else(|| CleanupError::new(std::io::Error::other("missing EventBus shutdown ticket")))?;
+            observer.wait_async().await.map(|_| ()).map_err(CleanupError::new)
+        })
     })
     .with_graceful_stop(move |bus| {
         let requested = bus
@@ -50,17 +61,5 @@ pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
             state.ticket = Some(requested);
         }
         Ok(())
-    })
-    .with_wait(move |_| {
-        let observer = {
-            let mut state = state.lock().expect("shutdown ticket lock");
-            state.wait_started = true;
-            state.ticket.take()
-        };
-        Box::pin(async move {
-            let observer =
-                observer.ok_or_else(|| CleanupError::new(std::io::Error::other("missing EventBus shutdown ticket")))?;
-            observer.wait_async().await.map(|_| ()).map_err(CleanupError::new)
-        })
     })
 }
