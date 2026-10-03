@@ -35,7 +35,8 @@ use crate::managed_execution_services::managed_execution_services;
 /// Creates a report under the caller-owned temporary `root` and builds its
 /// application. Keep both root and runtime alive until shutdown completes.
 /// Filesystem, registration, or construction failures preserve their error
-/// source (including a BuildFailure owner).
+/// source (including a BuildFailure owner). This synchronous function does not
+/// enter the runtime; the caller awaits `BuildFailure::settle` if needed.
 pub fn build_application(runtime: Handle, root: &Path) -> Result<Application, Box<dyn Error>> {
     std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")?;
     let registry = FileSystemRegistry::default();

@@ -24,13 +24,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         Ok(application) => application,
         Err(error) => match error.downcast::<BuildFailure>() {
             Ok(failure) => {
-                let (cause, cleanup) = failure.into_parts();
-                eprintln!("Application construction failed: {cause}");
-                if let Some(mut cleanup) = cleanup
-                    && let Err(error) = runtime.block_on(cleanup.wait())
+                let settled = runtime.block_on(failure.settle());
+                eprintln!("Application construction failed: {}", settled.cause());
+                if let Some(report) = settled.cleanup_report()
+                    && !report.is_success()
                 {
-                    eprintln!("Application cleanup failed: {error}; {:?}", error.report());
+                    eprintln!("Application cleanup failed: {report:?}");
                 }
+                let (cause, _) = settled.into_parts();
                 return Err(cause.into());
             }
             Err(error) => return Err(error),
