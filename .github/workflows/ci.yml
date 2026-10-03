@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-event-bus
-          ref: 2a68b804bcf0fceae174a7707b94e53717332128
+          ref: 563552b58fe5cfa93f0f4f4295e7ca4e70911be1
           path: rs-event-bus
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -80,4 +80,8 @@ jobs:
           sha256sum tests/fixtures/ioc_application_consumer/src/*.rs
           sha256sum tests/fixtures/ioc_application_consumer/tests/*.rs tests/fixtures/ioc_application_consumer/tests/internal/*.rs
       - name: Run pinned IoC consumer integration
-        run: ./ioc-ci-check.sh
+        run: |
+          cargo +1.94.0 check --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+          cargo +1.94.0 test --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+          cargo +1.94.0 run --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+          cargo +1.94.0 clippy --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --all-targets --locked -- -D warnings

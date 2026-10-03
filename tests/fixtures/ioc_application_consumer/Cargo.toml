@@ -10,7 +10,7 @@ name = "ioc_application_consumer"
 [dependencies]
 qubit-ioc = { path = "../../../../rs-ioc", version = "0.3.0", default-features = false }
 qubit-execution-services = { path = "../../..", version = "0.10" }
-qubit-event-bus = { path = "../../../../rs-event-bus", version = "0.19.0" }
+qubit-event-bus = { path = "../../../../rs-event-bus", version = "0.20.0" }
 qubit-fs-registry = { path = "../../../../rs-fs-registry", version = "0.7" }
 qubit-fs-local = { path = "../../../../rs-fs-local", version = "0.10", features = ["registry"] }
 qubit-fs = { path = "../../../../rs-fs", version = "0.2" }
