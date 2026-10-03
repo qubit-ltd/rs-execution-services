@@ -46,11 +46,9 @@ impl Drop for Release {
     }
 }
 
-/// Polling and cancelling the IoC observer retains the same pending bus ticket.
 /// The gate proves requests return before handlers finish without elapsed
-/// thresholds.
-#[test]
-fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
+/// thresholds. Polling and cancelling the IoC observer must retain its ticket.
+fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
     let runtime = Builder::new_multi_thread()
         .worker_threads(2)
         .enable_all()
@@ -111,8 +109,10 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
                     .poll(&mut Context::from_waker(Waker::noop()))
                     .is_pending()
             );
-            shutdown.abort();
-            shutdown.abort();
+            if upgrade_to_abort {
+                shutdown.abort();
+                shutdown.abort();
+            }
             assert!(
                 pin!(shutdown.wait())
                     .as_mut()
@@ -136,4 +136,16 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
         assert!(report.failures().is_empty());
         assert_eq!(ended_rx.recv().await.as_deref(), Some("real payload"));
     });
+}
+
+/// A graceful request keeps observing its generation after caller cancellation.
+#[test]
+fn test_blocked_handler_graceful_request_cancel_resume() {
+    exercise_blocked_handler_shutdown(false);
+}
+
+/// An Immediate upgrade preserves the already active graceful observation.
+#[test]
+fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
+    exercise_blocked_handler_shutdown(true);
 }
