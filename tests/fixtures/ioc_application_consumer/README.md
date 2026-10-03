@@ -1,18 +1,19 @@
 # IoC application consumer fixture
 
 This standalone application exercises the public integration boundary among
-`qubit-ioc` 0.3, `qubit-event-bus` 0.18, `qubit-fs-registry`, `qubit-fs-local`,
+`qubit-ioc` 0.3, `qubit-event-bus` 0.20, `qubit-fs-registry`, `qubit-fs-local`,
 `qubit-fs`, and `qubit-execution-services`. It resolves unpublished IoC and
 EventBus versions through sibling path dependencies. The Fs and FsRegistry
 paths and crates.io patches keep transitive and direct types identical. Keep
 the repositories as siblings in the Qubit workspace.
 
-From the `rs-execution-services` root, run `./ioc-ci-check.sh`. To run this
-fixture directly:
+From the `rs-execution-services` root, run the same commands as CI:
 
 ```bash
-cargo +1.94.0 run --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+cargo +1.94.0 check --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
 cargo +1.94.0 test --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+cargo +1.94.0 run --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --locked
+cargo +1.94.0 clippy --manifest-path tests/fixtures/ioc_application_consumer/Cargo.toml --all-targets --locked -- -D warnings
 ```
 
 `build_application` creates an IoC `Application` with a bounded `WaitPolicy`
@@ -38,17 +39,21 @@ terminated services. Queries cloned from `application.context()` may remain
 alive after the unique application owner starts shutdown.
 
 The executable also completes the error path: if construction returns a
-`BuildFailure`, it separates the original cause from its cleanup handle and
-explicitly waits for cleanup before returning the cause. If business work
+`BuildFailure`, it calls `settle()` to await optional cleanup and keeps the
+original `BuildError` alongside the optional `ShutdownReport`. It checks the
+report, including cleanup failures, before returning the original cause. If business work
 fails after construction, it requests `Immediate` and waits for the shutdown
 report before returning the business error. A shutdown failure prints the
 report. The error paths do not claim a final flush.
 
 Managed `ExecutionServices` uses `shutdown()` for a graceful request,
 `stop()` for Immediate/rollback, and `await_termination()` for its owned wait.
-The EventBus adapter calls nonblocking `request_shutdown`: its shared ticket
-slot preserves a graceful ticket when Immediate strengthens that shutdown,
-and its wait future calls `ticket.wait_async()` after releasing the slot lock.
+The EventBus adapter uses
+`Managed::asynchronous_with_graceful_ticket` to call nonblocking
+`request_shutdown` for both modes; the IoC adapter owns the ticket slot. The
+wait future calls `ticket.wait_async()` for the selected ticket. Its Drop must
+not cancel the bus shutdown, since an unused ticket may be discarded on
+Immediate upgrade.
 The `FlushWorker` also uses an asynchronous managed adapter: its wait owns the
 final task and handler acknowledgement. All three actual resources provide a
 wait callback because returning from their stop request does not confirm that
@@ -71,19 +76,20 @@ shutdown continues to later dependencies; an unfinished consumer may lose
 those dependencies. The tests use bounded guards to detect hangs; a timeout
 cannot interrupt arbitrary blocking code.
 
-The EventBus adapter is fixture-specific. Its request callback must return
-without blocking and retain the returned shutdown ticket across cancelled
-waits. The wait callback takes the ticket while holding the state lock, releases
-the lock, then observes it asynchronously. An Immediate upgrade requests
-stronger shutdown without discarding an already observed ticket. Keep the Tokio
+The EventBus adapter is fixture-specific. Its request callbacks must return
+without blocking. Cancelling a borrowed `ShutdownHandle::wait()` future
+preserves the already started ticket wait. An Immediate upgrade requests
+stronger shutdown without discarding an already observed ticket; before wait
+starts, its ticket replaces the pending graceful ticket. Keep the Tokio
 runtime alive until shutdown finishes; neither IoC nor the adapter can interrupt
 blocking synchronous callbacks.
 
-The historical lane under `rs-ioc/tests/fixtures/application_consumer` uses
-its original pinned EventBus 0.15 source and only four migrated public-API
-regressions. It does not cover this current fixture's EventBus request/ticket
+The historical lane under `rs-ioc/tests/fixtures/application_consumer` now
+pins EventBus 0.20 in its manifest, lockfile, and CI checkout, while retaining
+its historical fixture source and four public-API regressions. It does not
+cover this current fixture's EventBus request/ticket
 adapter, graceful final flush, rooted Fs metadata, or deadline behavior.
-Final external current-lane IoC, EventBus, and consumer source SHA pins are
-pending the real versioned commits in T11. Local path checkouts and working
-source hashes do not prove that an unpublished commit contains these changes.
+The external current-lane IoC, EventBus, and consumer source SHA pins are
+maintained in `rs-ioc/.github/workflows/downstream-contracts.yml`. Local path
+checkouts and working source hashes do not prove remote CI coverage.
 This is a downstream contract fixture, not evidence of production adoption.
