@@ -153,11 +153,10 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
             .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
-                Ok(Managed::asynchronous(Arc::new(WaitingConsumer), move |_| {
+                Ok(Managed::asynchronous_with_graceful(Arc::new(WaitingConsumer), move |_| {
                     observed_aborts.fetch_add(1, Ordering::SeqCst);
                     Ok(())
-                }, |_| Box::pin(std::future::pending()))
-                .with_graceful_stop(|_| Ok(())))
+                }, |_| Ok(()), |_| Box::pin(std::future::pending())))
             })
             .expect("register pending dependent consumer");
         let application = builder.build_all().expect("build dependency graph");
@@ -235,8 +234,11 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
             .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
-                Ok(Managed::asynchronous(Arc::new(WaitingConsumer), move |_| {
+                Ok(Managed::asynchronous_with_graceful(Arc::new(WaitingConsumer), move |_| {
                     observed_aborts.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }, move |_| {
+                    observed_graceful.fetch_add(1, Ordering::SeqCst);
                     Ok(())
                 }, move |_| {
                     observed_starts.fetch_add(1, Ordering::SeqCst);
@@ -244,10 +246,6 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
                         waiting.await;
                         Ok(())
                     })
-                })
-                .with_graceful_stop(move |_| {
-                    observed_graceful.fetch_add(1, Ordering::SeqCst);
-                    Ok(())
                 }))
             })
             .expect("register resumable consumer");
