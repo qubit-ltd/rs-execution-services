@@ -36,7 +36,8 @@ use crate::managed_execution_services::managed_execution_services;
 /// application. Keep both root and runtime alive until shutdown completes.
 /// Filesystem, registration, or construction failures preserve their error
 /// source (including a BuildFailure owner). This synchronous function does not
-/// enter the runtime; the caller awaits `BuildFailure::settle` if needed.
+/// enter the runtime; the caller borrows `BuildFailure` with `wait_cleanup`
+/// if needed, keeping the original cause available while cleanup completes.
 pub fn build_application(runtime: Handle, root: &Path) -> Result<Application, Box<dyn Error>> {
     std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")?;
     let registry = FileSystemRegistry::default();

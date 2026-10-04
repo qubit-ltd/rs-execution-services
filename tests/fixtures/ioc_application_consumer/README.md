@@ -39,9 +39,10 @@ terminated services. Queries cloned from `application.context()` may remain
 alive after the unique application owner starts shutdown.
 
 The executable also completes the error path: if construction returns a
-`BuildFailure`, it calls `settle()` to await optional cleanup and keeps the
-original `BuildError` alongside the optional `ShutdownReport`. It checks the
-report, including cleanup failures, before returning the original cause. If business work
+`BuildFailure`, it calls `wait_cleanup(&mut self)` to await optional cleanup
+while keeping the original `BuildError` available. A cancelled wait can be
+resumed on the same failure. It checks the report, including cleanup failures,
+before returning the original cause. If business work
 fails after construction, it requests `Immediate` and waits for the shutdown
 report before returning the business error. A shutdown failure prints the
 report. The error paths do not claim a final flush.

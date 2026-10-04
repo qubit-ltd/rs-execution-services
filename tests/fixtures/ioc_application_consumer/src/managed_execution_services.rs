@@ -21,17 +21,16 @@ pub fn managed_execution_services(runtime: Handle) -> Result<Managed<ExecutionSe
         .runtime(runtime)
         .build()
         .map_err(FactoryError::new)?;
-    Ok(Managed::asynchronous(Arc::new(services), |services| {
+    Ok(Managed::asynchronous_with_graceful(Arc::new(services), |services| {
         let _ = services.stop();
+        Ok(())
+    }, |services| {
+        services.shutdown();
         Ok(())
     }, |services| {
         Box::pin(async move {
             services.await_termination().await;
             Ok(())
         })
-    })
-    .with_graceful_stop(|services| {
-        services.shutdown();
-        Ok(())
     }))
 }

@@ -23,15 +23,15 @@ fn main() -> Result<(), Box<dyn Error>> {
     let application = match build_application(runtime.handle().clone(), root.path()) {
         Ok(application) => application,
         Err(error) => match error.downcast::<BuildFailure>() {
-            Ok(failure) => {
-                let settled = runtime.block_on(failure.settle());
-                eprintln!("Application construction failed: {}", settled.cause());
-                if let Some(report) = settled.cleanup_report()
+            Ok(mut failure) => {
+                let report = runtime.block_on(failure.wait_cleanup());
+                eprintln!("Application construction failed: {}", failure.as_ref().cause());
+                if let Some(report) = report
                     && !report.is_success()
                 {
                     eprintln!("Application cleanup failed: {report:?}");
                 }
-                let (cause, _) = settled.into_parts();
+                let (cause, _) = failure.into_parts();
                 return Err(cause.into());
             }
             Err(error) => return Err(error),

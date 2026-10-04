@@ -142,10 +142,10 @@ fn test_event_bus_missing_registry_prevents_factory_execution() {
         .expect("register event bus factory");
     builder.root::<EventBus>();
 
-    let failure = builder.build().err().expect("missing registry");
-    let settled = runtime.block_on(failure.settle());
-    assert!(matches!(settled.cause(), BuildError::MissingDependency { .. }));
-    assert!(settled.cleanup_report().is_none());
+    let mut failure = builder.build().err().expect("missing registry");
+    let report = runtime.block_on(failure.wait_cleanup());
+    assert!(matches!(failure.cause(), BuildError::MissingDependency { .. }));
+    assert!(report.is_none());
     assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
     assert_eq!(creates.load(Ordering::SeqCst), 0);
     assert!(observed_services.lock().expect("lock observed services").is_none());
@@ -226,7 +226,7 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
             .expect("register dependent failing factory");
         builder.root::<u8>();
 
-        let failure = timeout(Duration::from_secs(5), builder.build_async())
+        let mut failure = timeout(Duration::from_secs(5), builder.build_async())
             .await
             .expect("failure returns without awaiting cleanup")
             .err()
@@ -234,17 +234,17 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
         assert!(matches!(failure.cause(), BuildError::FactoryFailed { .. }));
         assert_eq!(stops.load(Ordering::SeqCst), 1);
         assert_eq!(waits.load(Ordering::SeqCst), 0);
-        let settled = timeout(Duration::from_secs(5), failure.settle())
+        let report = timeout(Duration::from_secs(5), failure.wait_cleanup())
             .await
             .expect("cleanup guard");
-        let BuildError::FactoryFailed { error, .. } = settled.cause() else {
+        let BuildError::FactoryFailed { error, .. } = failure.cause() else {
             panic!("original factory failure must remain the primary error");
         };
         assert_eq!(
             error.source().expect("original IO error").to_string(),
             "expected downstream failure"
         );
-        assert!(settled.cleanup_report().expect("cleanup report").is_complete());
+        assert!(report.expect("cleanup report").is_complete());
         let services = observed_services
             .lock()
             .expect("lock observed services")
@@ -401,7 +401,7 @@ fn test_build_failure_stops_an_already_created_managed_resource() {
         .expect("register failing factory");
     builder.root::<u16>();
 
-    let failure = builder.build().err().expect("factory fails");
+    let mut failure = builder.build().err().expect("factory fails");
     assert!(matches!(failure.cause(), BuildError::FactoryFailed { .. }));
     let services = observed_services
         .lock()
@@ -412,17 +412,17 @@ fn test_build_failure_stops_an_already_created_managed_resource() {
     assert_eq!(stops.load(Ordering::SeqCst), 1);
     assert_eq!(waits.load(Ordering::SeqCst), 0);
     runtime.block_on(async {
-        let settled = timeout(Duration::from_secs(5), failure.settle())
+        let report = timeout(Duration::from_secs(5), failure.wait_cleanup())
             .await
             .expect("synchronous build failure cleanup should complete before timeout");
-        let BuildError::FactoryFailed { error, .. } = settled.cause() else {
+        let BuildError::FactoryFailed { error, .. } = failure.cause() else {
             panic!("original factory failure must remain the primary error");
         };
         assert_eq!(
             error.source().expect("original IO error").to_string(),
             "expected failure"
         );
-        assert!(settled.cleanup_report().expect("cleanup report").is_complete());
+        assert!(report.expect("cleanup report").is_complete());
         timeout(Duration::from_secs(5), services.await_termination())
             .await
             .expect("synchronous build failure should stop execution services before timeout");
