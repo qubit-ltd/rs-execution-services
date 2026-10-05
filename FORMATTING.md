@@ -8,7 +8,7 @@ scripts and `rs-infra` configuration.
 Run the alignment script from the crate root before submitting changes:
 
 ```bash
-./align-ci.sh
+./.infra/bin/align-ci.sh
 ```
 
 The script prepares local path dependencies and runs the pinned `rs-infra-style`
@@ -18,13 +18,13 @@ formatter. Its toolchain and formatting configuration are selected by
 ## Check style without changing files
 
 ```bash
-./style-check.sh
+./.infra/bin/style-check.sh
 ```
 
 ## Run CI checks
 
 ```bash
-./ci-check.sh
+./.infra/bin/ci-check.sh
 ```
 
 The CI workflow is `.github/workflows/ci.yml`. It runs the project's configured
