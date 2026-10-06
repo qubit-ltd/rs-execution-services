@@ -196,10 +196,8 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
             .expect("register managed execution services");
         let expected_slot = Arc::clone(&observed_services);
         builder
-            .register_async_factory::<u8, _>(&[Dependency::of::<ExecutionServices>()], move |context| {
-                let dependency = context.get::<ExecutionServices>();
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
                 Box::pin(async move {
-                    let services = dependency.map_err(FactoryError::new)?;
                     assert!(Arc::ptr_eq(
                         &services,
                         expected_slot
@@ -306,10 +304,9 @@ fn test_cancelling_async_build_stops_managed_execution_services_once() {
             })
             .expect("register managed execution services");
         builder
-            .register_async_factory::<u8, _>(&[Dependency::of::<ExecutionServices>()], move |context| {
-                let dependency = context.get::<ExecutionServices>();
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
                 Box::pin(async move {
-                    let _services = dependency.map_err(FactoryError::new)?;
+                    let _services = services;
                     factory_started_tx.send(()).expect("test receiver should be alive");
                     std::future::pending::<()>().await;
                     Ok(Arc::new(1))
