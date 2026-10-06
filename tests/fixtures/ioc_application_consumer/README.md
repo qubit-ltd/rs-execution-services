@@ -47,6 +47,13 @@ fails after construction, it requests `Immediate` and waits for the shutdown
 report before returning the business error. A shutdown failure prints the
 report. The error paths do not claim a final flush.
 
+The lifecycle integration tests register their `ExecutionServices` consumers
+with `register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>`.
+This exercises `FactoryArgs` dependency derivation across the fixture's public
+crate boundary while keeping the same build-failure cleanup and cancellation
+assertions. The fixture remains a downstream contract test; it does not claim
+that production services have adopted this registration style.
+
 Managed `ExecutionServices` uses `shutdown()` for a graceful request,
 `stop()` for Immediate/rollback, and `await_termination()` for its owned wait.
 The EventBus adapter uses
