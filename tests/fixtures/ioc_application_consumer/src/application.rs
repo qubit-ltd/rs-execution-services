@@ -6,7 +6,8 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Assembles resources and declares the business consumer's dependency edges.
-use std::path::{Path, PathBuf};
+use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -38,10 +39,28 @@ use crate::managed_execution_services::managed_execution_services;
 pub enum ApplicationBuildError {
     /// The builder rejected a component definition.
     #[error(transparent)]
-    Registration(#[from] RegistrationError),
+    Registration(Box<RegistrationError>),
     /// Construction failed, possibly with managed cleanup still pending.
     #[error(transparent)]
-    Build(#[from] BuildFailure),
+    Build(Box<BuildFailure>),
+}
+
+impl From<RegistrationError> for ApplicationBuildError {
+    fn from(error: RegistrationError) -> Self {
+        Self::Registration(Box::new(error))
+    }
+}
+
+impl From<Box<RegistrationError>> for ApplicationBuildError {
+    fn from(error: Box<RegistrationError>) -> Self {
+        Self::Registration(error)
+    }
+}
+
+impl From<BuildFailure> for ApplicationBuildError {
+    fn from(failure: BuildFailure) -> Self {
+        Self::Build(Box::new(failure))
+    }
 }
 
 /// Builds an application, creating a report under the caller-owned temporary
@@ -60,16 +79,22 @@ pub fn build_application(
         Duration::from_secs(90),
         |duration| Box::pin(tokio::time::sleep(duration)),
     ));
-    builder.register_injected_managed_factory::<ExecutionServices, (), _>(|()| managed_execution_services(runtime))?;
+    builder.register_injected_managed_factory::<ExecutionServices, (), _>(|()| {
+        managed_execution_services(runtime)
+    })?;
     builder.register_injected_factory::<EventBusRegistry, (), _>(|()| {
         let registry = EventBusRegistry::with_local().map_err(FactoryError::new)?;
         registry.seal();
         Ok(Arc::new(registry))
     })?;
-    builder.register_injected_managed_factory::<EventBus, (Arc<EventBusRegistry>,), _>(|(registry,)| {
-        let bus = registry.create(&EventBusConfig::default()).map_err(FactoryError::new)?;
-        Ok(managed_event_bus(Arc::new(bus)))
-    })?;
+    builder.register_injected_managed_factory::<EventBus, (Arc<EventBusRegistry>,), _>(
+        |(registry,)| {
+            let bus = registry
+                .create(&EventBusConfig::default())
+                .map_err(FactoryError::new)?;
+            Ok(managed_event_bus(Arc::new(bus)))
+        },
+    )?;
     builder.register_injected_managed_factory::<FlushWorker, (Arc<ExecutionServices>, Arc<EventBus>), _>(
         |(services, bus)| FlushWorker::managed(services, bus),
     )?;
@@ -85,30 +110,39 @@ pub fn build_application(
 fn register_file_system(
     builder: &mut ContainerBuilder,
     root: PathBuf,
-) -> Result<(), RegistrationError> {
-    builder.register_factory::<FileSystemRegistry, _>(&[], move |_| {
-        let registry = FileSystemRegistry::default();
-        let policy = LocalResourcePolicy::bounded(
-            LocalListResourceLimits::new(16, 10_000, 8_388_608, 32, Duration::from_secs(30))
+) -> Result<(), Box<RegistrationError>> {
+    builder
+        .register_factory::<FileSystemRegistry, _>(&[], move |_| {
+            let registry = FileSystemRegistry::default();
+            let policy = LocalResourcePolicy::bounded(
+                LocalListResourceLimits::new(16, 10_000, 8_388_608, 32, Duration::from_secs(30))
+                    .map_err(FactoryError::new)?,
+                LocalCopyResourceLimits::new(
+                    16,
+                    10_000,
+                    1_073_741_824,
+                    32,
+                    Duration::from_secs(30),
+                )
                 .map_err(FactoryError::new)?,
-            LocalCopyResourceLimits::new(16, 10_000, 1_073_741_824, 32, Duration::from_secs(30))
-                .map_err(FactoryError::new)?,
-            LocalDeleteResourceLimits::new(16, 10_000, 8_388_608, Duration::from_secs(30)),
-        );
-        let id = FileSystemId::new("reports").map_err(FactoryError::new)?;
-        let provider =
-            LocalFileSystemProvider::rooted(id, &root, policy).map_err(FactoryError::new)?;
-        registry.register(provider).map_err(FactoryError::new)?;
-        std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")
-            .map_err(FactoryError::new)?;
-        Ok(Arc::new(registry))
-    })
+                LocalDeleteResourceLimits::new(16, 10_000, 8_388_608, Duration::from_secs(30)),
+            );
+            let id = FileSystemId::new("reports").map_err(FactoryError::new)?;
+            let provider =
+                LocalFileSystemProvider::rooted(id, &root, policy).map_err(FactoryError::new)?;
+            registry.register(provider).map_err(FactoryError::new)?;
+            std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")
+                .map_err(FactoryError::new)?;
+            Ok(Arc::new(registry))
+        })
+        .map_err(Box::new)
 }
 
 #[cfg(test)]
 mod tests {
     use qubit_fs_registry::FileSystemRegistry;
-    use qubit_ioc::{BuildError, ContainerBuilder};
+    use qubit_ioc::BuildError;
+    use qubit_ioc::ContainerBuilder;
 
     use super::register_file_system;
 

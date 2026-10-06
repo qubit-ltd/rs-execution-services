@@ -22,7 +22,8 @@ fn main() -> Result<(), Box<dyn Error>> {
     let root = tempfile::tempdir()?;
     let application = match build_application(runtime.handle().clone(), root.path()) {
         Ok(application) => application,
-        Err(ApplicationBuildError::Build(mut failure)) => {
+        Err(ApplicationBuildError::Build(failure)) => {
+            let mut failure = *failure;
             let report = runtime.block_on(failure.wait_cleanup());
             eprintln!("Application construction failed: {}", failure.cause());
             if let Some(report) = report
@@ -39,7 +40,8 @@ fn main() -> Result<(), Box<dyn Error>> {
         let context = application.context();
         let worker = context.get::<FlushWorker>()?;
         let services = context.get::<ExecutionServices>()?;
-        let result = runtime.block_on(services.spawn_io(async { Ok::<u8, std::io::Error>(43) })?)?;
+        let result =
+            runtime.block_on(services.spawn_io(async { Ok::<u8, std::io::Error>(43) })?)?;
         assert_eq!(result, 43);
         Ok((worker, services))
     })();
