@@ -21,8 +21,9 @@ and a real local `EventBus`. The example uses `bounded_with_total` with a 90
 second application budget in addition to its per-component budgets; this is a
 fixture value, not a universal production recommendation. It registers `EventBusRegistry`,
 `ExecutionServices`, and a `FlushWorker` that depends on both resources. The
-worker owns a typed subscription. After the whole dependency graph has been
-validated, the selected `FileSystemRegistry` factory creates `report.csv` under
+worker owns a typed subscription. After the selected roots' dependency graph
+has been validated, the selected `FileSystemRegistry` factory creates
+`report.csv` under
 the caller-owned temporary root, registers a rooted `LocalFileSystemProvider`,
 and returns the registry. The resource test resolves `file:///report.csv` and
 checks the real provider's canonical URI and `stat` length of 22 bytes.
