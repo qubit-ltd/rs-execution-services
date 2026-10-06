@@ -21,11 +21,11 @@ and a real local `EventBus`. The example uses `bounded_with_total` with a 90
 second application budget in addition to its per-component budgets; this is a
 fixture value, not a universal production recommendation. It registers `EventBusRegistry`,
 `ExecutionServices`, and a `FlushWorker` that depends on both resources. The
-worker owns a typed subscription. It also creates `report.csv` under a
-caller-owned temporary root, registers a rooted `LocalFileSystemProvider`, and
-makes it available through `FileSystemRegistry`. The resource test resolves
-`file:///report.csv` and checks the real provider's canonical URI and
-`stat` length of 22 bytes.
+worker owns a typed subscription. After the whole dependency graph has been
+validated, the selected `FileSystemRegistry` factory creates `report.csv` under
+the caller-owned temporary root, registers a rooted `LocalFileSystemProvider`,
+and returns the registry. The resource test resolves `file:///report.csv` and
+checks the real provider's canonical URI and `stat` length of 22 bytes.
 
 The normal executable submits a real IO task returning 43, then starts
 `Application::begin_shutdown(ShutdownMode::Graceful)` while its Tokio runtime
@@ -38,9 +38,10 @@ checks both results, the final message, successful shutdown report, and
 terminated services. Queries cloned from `application.context()` may remain
 alive after the unique application owner starts shutdown.
 
-The executable also completes the error path: if construction returns a
-`BuildFailure`, it calls `wait_cleanup(&mut self)` to await optional cleanup
-while keeping the original `BuildError` available. A cancelled wait can be
+`build_application` returns `ApplicationBuildError`, preserving construction
+failures as the `Build` variant. The executable matches that variant directly,
+calls `wait_cleanup(&mut self)` to await optional cleanup, and keeps the
+original `BuildFailure` until cleanup has completed. A cancelled wait can be
 resumed on the same failure. It checks the report, including cleanup failures,
 before returning the original cause. If business work
 fails after construction, it requests `Immediate` and waits for the shutdown
@@ -51,8 +52,8 @@ The lifecycle integration tests register their `ExecutionServices` consumers
 with `register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>`.
 This exercises `FactoryArgs` dependency derivation across the fixture's public
 crate boundary while keeping the same build-failure cleanup and cancellation
-assertions. The fixture remains a downstream contract test; it does not claim
-that production services have adopted this registration style.
+assertions. This fixture is a downstream contract test; it does not claim that
+production services have adopted this registration style.
 
 Managed `ExecutionServices` uses `shutdown()` for a graceful request,
 `stop()` for Immediate/rollback, and `await_termination()` for its owned wait.
