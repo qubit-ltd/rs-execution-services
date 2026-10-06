@@ -33,7 +33,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             let (cause, _) = failure.into_parts();
             return Err(cause.into());
         }
-        Err(ApplicationBuildError::Setup(error)) => return Err(error),
         Err(ApplicationBuildError::Registration(error)) => return Err(error.into()),
     };
     let business = (|| -> Result<_, Box<dyn Error>> {
