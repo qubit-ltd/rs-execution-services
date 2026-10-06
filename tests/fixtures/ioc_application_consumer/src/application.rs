@@ -23,8 +23,10 @@ use qubit_fs_local::LocalListResourceLimits;
 use qubit_fs_local::LocalResourcePolicy;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::Application;
+use qubit_ioc::BuildFailure;
 use qubit_ioc::ContainerBuilder;
 use qubit_ioc::FactoryError;
+use qubit_ioc::RegistrationError;
 use qubit_ioc::WaitPolicy;
 use tokio::runtime::Handle;
 
@@ -32,25 +34,51 @@ use crate::flush_worker::FlushWorker;
 use crate::managed_event_bus::managed_event_bus;
 use crate::managed_execution_services::managed_execution_services;
 
+/// Setup, registration, or construction failures, retaining any rollback owner.
+#[derive(Debug, thiserror::Error)]
+pub enum ApplicationBuildError {
+    /// Filesystem setup failed before registration or graph validation.
+    #[error(transparent)]
+    Setup(Box<dyn Error + Send + Sync + 'static>),
+    /// The builder rejected a component definition.
+    #[error(transparent)]
+    Registration(#[from] RegistrationError),
+    /// Construction failed, possibly with managed cleanup still pending.
+    #[error(transparent)]
+    Build(#[from] BuildFailure),
+}
+
 /// Creates a report under the caller-owned temporary `root` and builds its
 /// application. Keep both root and runtime alive until shutdown completes.
-/// Filesystem, registration, or construction failures preserve their error
+/// Filesystem setup, registration, or construction failures preserve their error
 /// source (including a BuildFailure owner). This synchronous function does not
 /// enter the runtime; the caller borrows `BuildFailure` with `wait_cleanup`
 /// if needed, keeping the original cause available while cleanup completes.
-pub fn build_application(runtime: Handle, root: &Path) -> Result<Application, Box<dyn Error>> {
-    std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")?;
+pub fn build_application(
+    runtime: Handle,
+    root: &Path,
+) -> Result<Application, ApplicationBuildError> {
+    std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")
+        .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?;
     let registry = FileSystemRegistry::default();
     let policy = LocalResourcePolicy::bounded(
-        LocalListResourceLimits::new(16, 10_000, 8_388_608, 32, Duration::from_secs(30))?,
-        LocalCopyResourceLimits::new(16, 10_000, 1_073_741_824, 32, Duration::from_secs(30))?,
+        LocalListResourceLimits::new(16, 10_000, 8_388_608, 32, Duration::from_secs(30))
+            .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?,
+        LocalCopyResourceLimits::new(16, 10_000, 1_073_741_824, 32, Duration::from_secs(30))
+            .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?,
         LocalDeleteResourceLimits::new(16, 10_000, 8_388_608, Duration::from_secs(30)),
     );
-    registry.register(LocalFileSystemProvider::rooted(
-        FileSystemId::new("reports")?,
-        root,
-        policy,
-    )?)?;
+    registry
+        .register(
+            LocalFileSystemProvider::rooted(
+                FileSystemId::new("reports")
+                    .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?,
+                root,
+                policy,
+            )
+            .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?,
+        )
+        .map_err(|error| ApplicationBuildError::Setup(Box::new(error)))?;
     let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::bounded_with_total(
         Duration::from_secs(30),
         Duration::from_secs(30),

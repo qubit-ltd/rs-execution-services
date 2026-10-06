@@ -11,5 +11,6 @@ mod flush_worker;
 pub mod managed_event_bus;
 pub mod managed_execution_services;
 
+pub use application::ApplicationBuildError;
 pub use application::build_application;
 pub use flush_worker::FlushWorker;

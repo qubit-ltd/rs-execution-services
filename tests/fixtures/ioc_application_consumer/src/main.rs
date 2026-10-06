@@ -8,10 +8,10 @@
 //! Run business work, then let the application owner perform the final flush.
 use std::error::Error;
 
+use ioc_application_consumer::ApplicationBuildError;
 use ioc_application_consumer::FlushWorker;
 use ioc_application_consumer::build_application;
 use qubit_execution_services::ExecutionServices;
-use qubit_ioc::BuildFailure;
 use qubit_ioc::ShutdownMode;
 use tokio::runtime::Builder;
 
@@ -22,20 +22,19 @@ fn main() -> Result<(), Box<dyn Error>> {
     let root = tempfile::tempdir()?;
     let application = match build_application(runtime.handle().clone(), root.path()) {
         Ok(application) => application,
-        Err(error) => match error.downcast::<BuildFailure>() {
-            Ok(mut failure) => {
-                let report = runtime.block_on(failure.wait_cleanup());
-                eprintln!("Application construction failed: {}", failure.as_ref().cause());
-                if let Some(report) = report
-                    && !report.is_success()
-                {
-                    eprintln!("Application cleanup failed: {report:?}");
-                }
-                let (cause, _) = failure.into_parts();
-                return Err(cause.into());
+        Err(ApplicationBuildError::Build(mut failure)) => {
+            let report = runtime.block_on(failure.wait_cleanup());
+            eprintln!("Application construction failed: {}", failure.cause());
+            if let Some(report) = report
+                && !report.is_success()
+            {
+                eprintln!("Application cleanup failed: {report:?}");
             }
-            Err(error) => return Err(error),
-        },
+            let (cause, _) = failure.into_parts();
+            return Err(cause.into());
+        }
+        Err(ApplicationBuildError::Setup(error)) => return Err(error),
+        Err(ApplicationBuildError::Registration(error)) => return Err(error.into()),
     };
     let business = (|| -> Result<_, Box<dyn Error>> {
         let context = application.context();

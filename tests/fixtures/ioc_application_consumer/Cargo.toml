@@ -15,6 +15,7 @@ qubit-fs-registry = { path = "../../../../rs-fs-registry", version = "0.7" }
 qubit-fs-local = { path = "../../../../rs-fs-local", version = "0.10", features = ["registry"] }
 qubit-fs = { path = "../../../../rs-fs", version = "0.2" }
 tempfile = "3"
+thiserror = "2"
 tokio = { version = "^1.53", features = ["rt-multi-thread", "sync", "time"] }
 
 [workspace]
