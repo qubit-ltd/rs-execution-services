@@ -35,7 +35,7 @@ use crate::flush_worker::FlushWorker;
 use crate::managed_event_bus::managed_event_bus;
 use crate::managed_execution_services::managed_execution_services;
 
-/// Registration or construction failures, retaining any rollback owner.
+/// Registration or construction failures, preserving settled cleanup results.
 #[derive(Debug, thiserror::Error)]
 pub enum ApplicationBuildError {
     /// The builder rejected a component definition.
@@ -66,8 +66,9 @@ impl From<SettledBuildFailure> for ApplicationBuildError {
 
 /// Builds an application using the caller-owned filesystem root. Keep both root
 /// and runtime alive until shutdown completes. A construction failure is
-/// returned only after managed rollback has finished, with its original cause
-/// and cleanup report preserved.
+/// returned after managed rollback waiting completes, with its original cause
+/// and cleanup report preserved. Cleanup can still be unsuccessful or
+/// incomplete when that wait ends.
 pub async fn build_application(
     runtime: Handle,
     root: &Path,
