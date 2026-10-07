@@ -13,4 +13,5 @@ pub mod managed_execution_services;
 
 pub use application::ApplicationBuildError;
 pub use application::build_application;
+pub use application::write_report;
 pub use flush_worker::FlushWorker;

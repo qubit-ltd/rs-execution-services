@@ -23,10 +23,11 @@ use qubit_fs_local::LocalListResourceLimits;
 use qubit_fs_local::LocalResourcePolicy;
 use qubit_fs_registry::FileSystemRegistry;
 use qubit_ioc::Application;
-use qubit_ioc::BuildFailure;
 use qubit_ioc::ContainerBuilder;
 use qubit_ioc::FactoryError;
 use qubit_ioc::RegistrationError;
+use qubit_ioc::SettledBuildFailure;
+use qubit_ioc::ValidationScope;
 use qubit_ioc::WaitPolicy;
 use tokio::runtime::Handle;
 
@@ -40,9 +41,9 @@ pub enum ApplicationBuildError {
     /// The builder rejected a component definition.
     #[error(transparent)]
     Registration(Box<RegistrationError>),
-    /// Construction failed, possibly with managed cleanup still pending.
+    /// Construction failed after rollback waiting, with its result preserved.
     #[error(transparent)]
-    Build(Box<BuildFailure>),
+    Build(Box<SettledBuildFailure>),
 }
 
 impl From<RegistrationError> for ApplicationBuildError {
@@ -57,28 +58,28 @@ impl From<Box<RegistrationError>> for ApplicationBuildError {
     }
 }
 
-impl From<BuildFailure> for ApplicationBuildError {
-    fn from(failure: BuildFailure) -> Self {
+impl From<SettledBuildFailure> for ApplicationBuildError {
+    fn from(failure: SettledBuildFailure) -> Self {
         Self::Build(Box::new(failure))
     }
 }
 
-/// Builds an application, creating a report under the caller-owned temporary
-/// `root` after graph validation. Keep both root and runtime alive until shutdown
-/// completes. Registration or construction failures preserve their error source
-/// (including a BuildFailure owner). This synchronous function does not
-/// enter the runtime; the caller borrows `BuildFailure` with `wait_cleanup`
-/// if needed, keeping the original cause available while cleanup completes.
-pub fn build_application(
+/// Builds an application using the caller-owned filesystem root. Keep both root
+/// and runtime alive until shutdown completes. A construction failure is
+/// returned only after managed rollback has finished, with its original cause
+/// and cleanup report preserved.
+pub async fn build_application(
     runtime: Handle,
     root: &Path,
 ) -> Result<Application, ApplicationBuildError> {
-    let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::bounded_with_total(
-        Duration::from_secs(30),
-        Duration::from_secs(30),
-        Duration::from_secs(90),
-        |duration| Box::pin(tokio::time::sleep(duration)),
-    ));
+    let mut builder = ContainerBuilder::new()
+        .wait_policy(WaitPolicy::bounded_with_total(
+            Duration::from_secs(30),
+            Duration::from_secs(30),
+            Duration::from_secs(90),
+            |duration| Box::pin(tokio::time::sleep(duration)),
+        ))
+        .validation_scope(ValidationScope::AllActive);
     builder.register_injected_managed_factory::<ExecutionServices, (), _>(|()| {
         managed_execution_services(runtime)
     })?;
@@ -101,12 +102,17 @@ pub fn build_application(
     register_file_system(&mut builder, root.to_path_buf())?;
     builder.root::<FlushWorker>();
     builder.root::<FileSystemRegistry>();
-    Ok(builder.build()?)
+    Ok(builder.build_settled().await?)
 }
 
-/// Registers a factory that creates the report and registry under `root` only
-/// after graph validation. Registration errors are returned immediately; setup
-/// errors are retained as factory errors in a build failure.
+/// Writes the business report under the caller-provided root.
+pub fn write_report(root: &Path) -> std::io::Result<()> {
+    std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")
+}
+
+/// Registers a factory that creates a registry and rooted provider under
+/// `root`. Registration errors are returned immediately; setup errors are
+/// retained as factory errors in a settled build failure.
 fn register_file_system(
     builder: &mut ContainerBuilder,
     root: PathBuf,
@@ -131,8 +137,6 @@ fn register_file_system(
             let provider =
                 LocalFileSystemProvider::rooted(id, &root, policy).map_err(FactoryError::new)?;
             registry.register(provider).map_err(FactoryError::new)?;
-            std::fs::write(root.join("report.csv"), b"name,total\nexample,42\n")
-                .map_err(FactoryError::new)?;
             Ok(Arc::new(registry))
         })
         .map_err(Box::new)
@@ -140,9 +144,13 @@ fn register_file_system(
 
 #[cfg(test)]
 mod tests {
+    use std::io;
+
     use qubit_fs_registry::FileSystemRegistry;
     use qubit_ioc::BuildError;
     use qubit_ioc::ContainerBuilder;
+    use qubit_ioc::Dependency;
+    use qubit_ioc::FactoryError;
 
     use super::register_file_system;
 
@@ -160,6 +168,27 @@ mod tests {
             Err(failure) => failure,
         };
         assert!(matches!(failure.cause(), BuildError::MissingRoot { .. }));
+        assert!(!root.path().join("report.csv").exists());
+    }
+
+    /// A later factory failure must not leave a report behind.
+    #[tokio::test]
+    async fn test_later_factory_failure_does_not_create_report() {
+        let root = tempfile::tempdir().expect("temporary root");
+        let mut builder = ContainerBuilder::new();
+        register_file_system(&mut builder, root.path().to_path_buf()).expect("register filesystem");
+        builder
+            .register_factory::<u8, _>(&[Dependency::of::<FileSystemRegistry>()], |_| {
+                Err(FactoryError::new(io::Error::other("expected failure")))
+            })
+            .expect("register failing factory");
+        builder.root::<u8>();
+
+        let failure = match builder.build_settled().await {
+            Ok(_) => panic!("failing factory must fail construction"),
+            Err(failure) => failure,
+        };
+        assert!(matches!(failure.cause(), BuildError::FactoryFailed { .. }));
         assert!(!root.path().join("report.csv").exists());
     }
 }

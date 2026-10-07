@@ -8,6 +8,7 @@
 //! Real resource integration through application ownership.
 use ioc_application_consumer::FlushWorker;
 use ioc_application_consumer::build_application;
+use ioc_application_consumer::write_report;
 use qubit_execution_services::ExecutionServices;
 use qubit_fs::path::ConnectionUri;
 use qubit_fs_registry::FileSystemConfig;
@@ -22,7 +23,10 @@ use tokio::runtime::Builder;
 fn test_graceful_shutdown_flushes_before_stopping_dependencies() {
     let runtime = Builder::new_multi_thread().enable_all().build().expect("runtime");
     let root = tempfile::tempdir().expect("temporary report root");
-    let application = build_application(runtime.handle().clone(), root.path()).expect("application");
+    let application = runtime
+        .block_on(build_application(runtime.handle().clone(), root.path()))
+        .expect("application");
+    assert!(!root.path().join("report.csv").exists());
     let context = application.context();
     let retained = context.clone();
     let worker = context.get::<FlushWorker>().expect("worker");
@@ -43,14 +47,15 @@ fn test_graceful_shutdown_flushes_before_stopping_dependencies() {
 fn test_registry_resolves_real_report_metadata() {
     let runtime = Builder::new_multi_thread().enable_all().build().expect("runtime");
     let root = tempfile::tempdir().expect("temporary report root");
-    let application = build_application(runtime.handle().clone(), root.path()).expect("application");
+    let application = runtime
+        .block_on(build_application(runtime.handle().clone(), root.path()))
+        .expect("application");
+    assert!(!root.path().join("report.csv").exists());
+    write_report(root.path()).expect("write report after build");
     let registry = application.context().get::<FileSystemRegistry>().expect("registry");
     let config = FileSystemConfig::new(ConnectionUri::parse("file:///report.csv").expect("uri"));
     let resolution = registry.resolve_config(&config).expect("resolve report");
-    assert_eq!(
-        resolution.file_system().stat(resolution.path()).expect("stat").len(),
-        Some(22)
-    );
+    assert_eq!(resolution.file_system().stat(resolution.path()).expect("stat").len(), Some(22));
     assert_eq!(resolution.canonical_uri().as_str(), "file:///report.csv");
     let mut shutdown = application.begin_shutdown(ShutdownMode::Immediate);
     assert!(runtime.block_on(shutdown.wait()).expect("report").is_success());

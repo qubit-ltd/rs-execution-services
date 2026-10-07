@@ -54,7 +54,9 @@ fn test_ioc_shutdown_terminates_running_execution_services() {
         .expect("create test runtime");
     runtime.block_on(async {
         let root = tempfile::tempdir().expect("create temporary root");
-        let application = build_application(runtime.handle().clone(), root.path()).expect("build application");
+        let application = build_application(runtime.handle().clone(), root.path())
+            .await
+            .expect("build application");
         let context = application.context();
         let worker = context.get::<FlushWorker>().expect("resolve worker");
         let services = context.get::<ExecutionServices>().expect("resolve execution services");
