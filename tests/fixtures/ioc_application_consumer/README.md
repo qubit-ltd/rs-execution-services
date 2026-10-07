@@ -22,11 +22,12 @@ second application budget in addition to its per-component budgets; this is a
 fixture value, not a universal production recommendation. It registers `EventBusRegistry`,
 `ExecutionServices`, and a `FlushWorker` that depends on both resources. The
 worker owns a typed subscription. After the selected roots' dependency graph
-has been validated, the selected `FileSystemRegistry` factory creates
-`report.csv` under
-the caller-owned temporary root, registers a rooted `LocalFileSystemProvider`,
-and returns the registry. The resource test resolves `file:///report.csv` and
-checks the real provider's canonical URI and `stat` length of 22 bytes.
+has been validated, the selected `FileSystemRegistry` factory registers a
+rooted `LocalFileSystemProvider` under the caller-owned temporary root and
+returns the registry. Once `build_application` succeeds, the executable calls
+`write_report` to create `report.csv`. The resource test follows that same
+order, then resolves `file:///report.csv` and checks the real provider's
+canonical URI and `stat` length of 22 bytes.
 
 The normal executable submits a real IO task returning 43, then starts
 `Application::begin_shutdown(ShutdownMode::Graceful)` while its Tokio runtime
@@ -40,14 +41,14 @@ terminated services. Queries cloned from `application.context()` may remain
 alive after the unique application owner starts shutdown.
 
 `build_application` returns `ApplicationBuildError`, preserving construction
-failures as the `Build` variant. The executable matches that variant directly,
-calls `wait_cleanup(&mut self)` to await optional cleanup, and keeps the
-original `BuildFailure` until cleanup has completed. A cancelled wait can be
-resumed on the same failure. It checks the report, including cleanup failures,
-before returning the original cause. If business work
-fails after construction, it requests `Immediate` and waits for the shutdown
-report before returning the business error. A shutdown failure prints the
-report. The error paths do not claim a final flush.
+failures as the `Build` variant. It uses `build_settled().await`, so a build
+failure is returned only after managed rollback waiting completes; the
+`SettledBuildFailure` retains both the original construction cause and its
+cleanup report. After a successful build, the executable writes `report.csv`
+and runs business work. If the report write or later business work fails, it
+requests `Immediate` shutdown and waits for the shutdown report before returning
+the business error. A shutdown failure prints the report. The error paths do
+not claim a final flush.
 
 The lifecycle integration tests register their `ExecutionServices` consumers
 with `register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>`.
