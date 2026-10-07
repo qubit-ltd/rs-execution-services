@@ -21,8 +21,14 @@ and a real local `EventBus`. The example uses `bounded_with_total` with a 90
 second application budget in addition to its per-component budgets; this is a
 fixture value, not a universal production recommendation. It registers `EventBusRegistry`,
 `ExecutionServices`, and a `FlushWorker` that depends on both resources. The
-worker owns a typed subscription. After the selected roots' dependency graph
-has been validated, the selected `FileSystemRegistry` factory registers a
+worker owns a typed subscription. `build_application` explicitly selects
+`ValidationScope::AllActive` because this fixture is an application assembly
+point: it checks every active registration for graph errors before any factory
+runs. The `FlushWorker` and `FileSystemRegistry` roots still determine what is
+constructed; an active factory outside their dependency closures is validated
+but is not run. Applications that intentionally validate only a selected root
+closure can retain the default `ValidationScope::Reachable` instead. After
+validation, the selected `FileSystemRegistry` factory registers a
 rooted `LocalFileSystemProvider` under the caller-owned temporary root and
 returns the registry. Once `build_application` succeeds, the executable calls
 `write_report` to create `report.csv`. The resource test follows that same
@@ -56,6 +62,16 @@ This exercises `FactoryArgs` dependency derivation across the fixture's public
 crate boundary while keeping the same build-failure cleanup and cancellation
 assertions. This fixture is a downstream contract test; it does not claim that
 production services have adopted this registration style.
+
+The cancellation tests exercise both IoC build paths with real
+`ExecutionServices`. Dropping a polled `build_async()` future requests one
+Immediate stop; the caller separately awaits `ExecutionServices::await_termination()`
+because that path has no retained cleanup report. With
+`let mut session = builder.build_async_session()`, dropping a polled
+`session.run()` future also requests one stop, while
+`session.wait_cancelled_cleanup().await` resumes the owned wait and returns a
+`ShutdownReport`. The test checks that this report succeeds only after the
+services have terminated. Keep the Tokio runtime alive through this wait.
 
 Managed `ExecutionServices` uses `shutdown()` for a graceful request,
 `stop()` for Immediate/rollback, and `await_termination()` for its owned wait.
@@ -92,8 +108,11 @@ without blocking. Cancelling a borrowed `ShutdownHandle::wait()` future
 preserves the already started ticket wait. An Immediate upgrade requests
 stronger shutdown without discarding an already observed ticket; before wait
 starts, its ticket replaces the pending graceful ticket. Keep the Tokio
-runtime alive until shutdown finishes; neither IoC nor the adapter can interrupt
-blocking synchronous callbacks.
+runtime alive until shutdown finishes. The blocked handler test verifies that
+the original graceful ticket stays pending after an Immediate upgrade while
+the handler remains blocked. A subscriber interceptor signals completion only
+after the handler callback returns; the resumed wait returns after that signal.
+Neither IoC nor the adapter can interrupt blocking synchronous callbacks.
 
 The historical lane under `rs-ioc/tests/fixtures/application_consumer` now
 pins EventBus 0.20 in its manifest, lockfile, and CI checkout, while retaining

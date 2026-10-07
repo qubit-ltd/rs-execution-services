@@ -350,6 +350,104 @@ fn test_cancelling_async_build_stops_managed_execution_services_once() {
     });
 }
 
+/// A cancelled build session keeps the real service's shutdown observation
+/// available after its pending dependent factory is dropped.
+#[test]
+fn test_cancelled_build_session_waits_for_managed_execution_services_termination() {
+    let runtime = Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("create test runtime");
+    runtime.block_on(async {
+        let creates = Arc::new(AtomicUsize::new(0));
+        let observed_services = Arc::new(Mutex::new(None::<Arc<ExecutionServices>>));
+        let stops = Arc::new(AtomicUsize::new(0));
+        let waits = Arc::new(AtomicUsize::new(0));
+        let (factory_started_tx, factory_started_rx) = oneshot::channel();
+        let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::unbounded());
+        let create_count = Arc::clone(&creates);
+        let observed_slot = Arc::clone(&observed_services);
+        let handle = runtime.handle().clone();
+        let stop_count = Arc::clone(&stops);
+        let wait_count = Arc::clone(&waits);
+        builder
+            .register_managed_factory::<ExecutionServices, _>(&[], move |_| {
+                create_count.fetch_add(1, Ordering::SeqCst);
+                let services = Arc::new(
+                    ExecutionServices::builder()
+                        .enable_io()
+                        .runtime(handle)
+                        .build()
+                        .map_err(FactoryError::new)?,
+                );
+                *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
+                Ok(Managed::asynchronous(services, move |services| {
+                    stop_count.fetch_add(1, Ordering::SeqCst);
+                    let _stop_report = services.stop();
+                    Ok(())
+                }, move |services| {
+                    wait_count.fetch_add(1, Ordering::SeqCst);
+                    Box::pin(async move {
+                        services.await_termination().await;
+                        Ok(())
+                    })
+                }))
+            })
+            .expect("register managed execution services");
+        builder
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
+                Box::pin(async move {
+                    let _services = services;
+                    factory_started_tx.send(()).expect("test receiver should be alive");
+                    std::future::pending::<()>().await;
+                    Ok(Arc::new(1))
+                })
+            })
+            .expect("register pending async factory");
+        builder.root::<u8>();
+
+        let mut session = builder.build_async_session();
+        let mut build = Box::pin(session.run());
+        let mut factory_started = Box::pin(factory_started_rx);
+        timeout(
+            Duration::from_secs(5),
+            std::future::poll_fn(|context| {
+                if build.as_mut().poll(context).is_ready() {
+                    panic!("pending async factory unexpectedly completed");
+                }
+                factory_started
+                    .as_mut()
+                    .poll(context)
+                    .map(|result| result.expect("dependent async factory should start"))
+            }),
+        )
+        .await
+        .expect("dependent async factory should start before timeout");
+        drop(build);
+
+        let services = observed_services
+            .lock()
+            .expect("lock observed services")
+            .clone()
+            .expect("resource was handed off");
+        assert_eq!(creates.load(Ordering::SeqCst), 1);
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        assert_eq!(waits.load(Ordering::SeqCst), 0);
+        let report = timeout(Duration::from_secs(5), session.wait_cancelled_cleanup())
+            .await
+            .expect("cancelled session cleanup should finish before timeout")
+            .expect("managed resource should have a cleanup report");
+        assert!(report.is_success(), "cancelled session cleanup: {report:?}");
+        assert_eq!(stops.load(Ordering::SeqCst), 1);
+        assert_eq!(waits.load(Ordering::SeqCst), 1);
+        assert!(services.is_terminated());
+        assert!(matches!(
+            services.spawn_io(async { Ok::<(), io::Error>(()) }),
+            Err(ExecutionServicesSubmissionError::Rejected { .. })
+        ));
+    });
+}
+
 /// Verifies the real resource lifecycle through the public application
 /// boundary.
 #[test]

@@ -19,6 +19,7 @@ use ioc_application_consumer::managed_event_bus::managed_event_bus;
 use qubit_event_bus::EventBus;
 use qubit_event_bus::local::LocalEventBusConfig;
 use qubit_event_bus::model::PublishRequest;
+use qubit_event_bus::model::SubscribeOptions;
 use qubit_event_bus::model::SubscribeRequest;
 use qubit_event_bus::model::Topic;
 use qubit_ioc::ContainerBuilder;
@@ -64,9 +65,21 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
         let (started_tx, started_rx) = oneshot::channel();
         let started = Mutex::new(Some(started_tx));
         let (ended_tx, mut ended_rx) = tokio::sync::mpsc::unbounded_channel();
+        let options = SubscribeOptions::<String>::builder()
+            .interceptor(move |delivery, next| {
+                let payload = delivery.payload().clone();
+                let result = next(delivery);
+                ended_tx
+                    .send(payload)
+                    .expect("handler completion receiver");
+                result
+            })
+            .build();
         let _subscription = bus
             .subscribe(
-                SubscribeRequest::new("blocked-handler", topic.clone()).expect("subscribe request"),
+                SubscribeRequest::new("blocked-handler", topic.clone())
+                    .expect("subscribe request")
+                    .with_options(options),
                 move |delivery| {
                     started
                         .lock()
@@ -80,7 +93,7 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
                     while !*opened {
                         opened = ready.wait(opened).expect("handler gate wait");
                     }
-                    ended_tx.send(delivery.payload().clone()).expect("message receiver");
+                    assert_eq!(delivery.payload(), "real payload");
                 },
             )
             .expect("subscription");
@@ -126,6 +139,13 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
             .expect("nonblocking request guard")
             .expect("request task");
         assert!(ended_rx.try_recv().is_err(), "handler remains gated after requests");
+        assert!(
+            pin!(shutdown.wait())
+                .as_mut()
+                .poll(&mut Context::from_waker(Waker::noop()))
+                .is_pending(),
+            "the original ticket must still wait while the handler is blocked"
+        );
         release.release();
         let report = tokio::time::timeout(Duration::from_secs(5), shutdown.wait())
             .await
@@ -134,7 +154,12 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
         assert!(report.is_success());
         assert_eq!(report.mode(), IocShutdownMode::Graceful);
         assert!(report.failures().is_empty());
-        assert_eq!(ended_rx.recv().await.as_deref(), Some("real payload"));
+        assert_eq!(
+            ended_rx
+                .try_recv()
+                .expect("shutdown must wait for the real handler to finish"),
+            "real payload"
+        );
     });
 }
 
