@@ -33,10 +33,10 @@ thiserror = "^2.0"
 tokio = { version = "^1.53", features = ["macros", "rt", "sync"] }
 
 qubit-function = "0.18"
-qubit-executor = "0.8"
-qubit-rayon-executor = { version = "0.8", features = ["async-wait"] }
-qubit-tokio-executor = "0.10"
-qubit-thread-pool = { version = "0.11", features = ["async-wait"] }
+qubit-executor = "0.9"
+qubit-rayon-executor = { version = "0.9", features = ["async-wait"] }
+qubit-tokio-executor = "0.11"
+qubit-thread-pool = { version = "0.12", features = ["async-wait"] }
 
 [dev-dependencies]
 tokio = { version = "^1.53", features = ["macros", "rt-multi-thread", "time"] }
