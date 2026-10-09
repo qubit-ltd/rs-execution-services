@@ -1,6 +1,6 @@
 [package]
 name = "qubit-execution-services"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2024"
 rust-version = "1.94"
 authors = ["Haixing Hu <starfish.hu@gmail.com>"]
@@ -36,7 +36,7 @@ qubit-function = "0.18"
 qubit-executor = "0.9"
 qubit-rayon-executor = { version = "0.9", features = ["async-wait"] }
 qubit-tokio-executor = "0.11"
-qubit-thread-pool = { version = "0.12", features = ["async-wait"] }
+qubit-thread-pool = { version = "0.12.1", features = ["async-wait"] }
 
 [dev-dependencies]
 tokio = { version = "^1.53", features = ["macros", "rt-multi-thread", "time"] }

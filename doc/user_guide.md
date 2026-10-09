@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) | [README](../README.md)
 
-This guide is for Rust application developers using `qubit-execution-services` 0.10.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
+This guide is for Rust application developers using `qubit-execution-services` 0.10.1. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
 
 ## Conceptual Model
 
@@ -54,7 +54,7 @@ The crate requires Rust 1.94 or newer. Add the published crate to the applicatio
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10"
+qubit-execution-services = "0.10.1"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 

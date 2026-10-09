@@ -133,9 +133,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-argument"
-version = "0.4.5"
+version = "0.4.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "caf9edf4c37fcd532e92ef1cea6611f36cdbe4b08ec8f8ed72b2f01425563858"
+checksum = "e1ce6e3033a810f5c8fe64e9b96455ec40f59c5c73a42ef5b9700a64c7eed35f"
 
 [[package]]
 name = "qubit-atomic"
@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-execution-services"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "qubit-executor",
  "qubit-function",
@@ -245,9 +245,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-thread-pool"
-version = "0.12.0"
+version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6afbba67d9b7d5675406c6dca8e5428296f6391b65194630a708a4c716e7914e"
+checksum = "133ab372ccd645a5a683abd45e738234ff9bb5f39e78c3a2d6e324581bad6478"
 dependencies = [
  "crossbeam-deque",
  "qubit-argument",

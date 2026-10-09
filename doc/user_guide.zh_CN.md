@@ -2,7 +2,7 @@
 
 [中文 README](../README.zh_CN.md) · [English user guide](user_guide.md) · [API 文档](https://docs.rs/qubit-execution-services)
 
-本文适用于 `qubit-execution-services` 0.10.0，要求 Rust 1.94 或更高版本。它面向需要在同一应用中安排同步阻塞工作、CPU 计算和异步任务的开发者。读到[检查报表结果](#检查报表结果)，即可完成一次业务任务；容量、监控和停机可在接入后按需查阅。只需要一种执行能力的组件，可以直接使用对应的底层 executor crate。
+本文适用于 `qubit-execution-services` 0.10.1，要求 Rust 1.94 或更高版本。它面向需要在同一应用中安排同步阻塞工作、CPU 计算和异步任务的开发者。读到[检查报表结果](#检查报表结果)，即可完成一次业务任务；容量、监控和停机可在接入后按需查阅。只需要一种执行能力的组件，可以直接使用对应的底层 executor crate。
 
 ## 它解决什么问题
 
@@ -22,7 +22,7 @@
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10"
+qubit-execution-services = "0.10.1"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
