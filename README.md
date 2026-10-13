@@ -15,7 +15,7 @@ Add the crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10.1"
+qubit-execution-services = "0.10"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
 
