@@ -69,7 +69,7 @@ IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取�
 
 正常应用关闭顺序不同：先停止生产者，再调用 `ExecutionServices::shutdown()`，在 Tokio runtime 仍运行时等待服务终止，最后关闭 IoC context。cleanup 时重复 stop 不会重新开放准入。
 
-CI 使用 [ioc-integration 工作流](../.github/workflows/ci.yml)的 checkout ref 固定兄弟仓库版本，并记录实际检出的 HEAD 以便复现。该 fixture 验证跨 crate 契约，不代表生产下游已经采用此门面。
+现有 [ioc-integration 工作流](../.github/workflows/ci.yml)检查固定基线；[ioc-current-integration 工作流](../.github/workflows/ioc-current-integration.yml)检查本仓库触发事件对应的提交与 `rs-ioc/main`，其他兄弟仓库仍固定到指定提交。每日定时运行也会覆盖只有下游 IoC 仓库更新的组合。两个工作流都验证 fixture 契约，不代表生产环境已经采用此门面。
 
 ## 验证
 
