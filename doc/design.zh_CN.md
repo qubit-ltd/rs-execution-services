@@ -69,7 +69,7 @@ IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取�
 
 正常应用关闭顺序不同：先停止生产者，再调用 `ExecutionServices::shutdown()`，在 Tokio runtime 仍运行时等待服务终止，最后关闭 IoC context。cleanup 时重复 stop 不会重新开放准入。
 
-CI 使用固定的 sibling 版本验证集成：`rs-ioc` `762660f56e425a5b1b442528a9f979a2c41a1a9d`、`rs-event-bus` `bf7ab432947070e6e8bbc6ffe02560eb1957ad27`、`rs-fs-registry` `d3a6cacbc05bea970175db9cf6211680aa39c87c`。这些 SHA 只用于复现 fixture，不代表生产下游已经使用该门面。
+CI 使用 [ioc-integration 工作流](../.github/workflows/ci.yml)的 checkout ref 固定兄弟仓库版本，并记录实际检出的 HEAD 以便复现。该 fixture 验证跨 crate 契约，不代表生产下游已经采用此门面。
 
 ## 验证
 
