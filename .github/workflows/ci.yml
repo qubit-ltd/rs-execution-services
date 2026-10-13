@@ -24,7 +24,7 @@ jobs:
       pull-requests: write
       pages: write
       id-token: write
-    uses: qubit-ltd/rs-infra-ci/.github/workflows/github-ci.yml@main
+    uses: qubit-ltd/rs-infra-ci/.github/workflows/github-ci.yml@22e34b76a52b6a9c5c09ddf3fa1fa58b07c46f06
 
   ioc-integration:
     name: IoC application integration
