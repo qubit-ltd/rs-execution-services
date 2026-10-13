@@ -1,0 +1,81 @@
+name: IoC current integration
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ioc-current-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: rs-execution-services
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-ioc
+          ref: main
+          path: rs-ioc
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-event-bus
+          ref: 563552b58fe5cfa93f0f4f4295e7ca4e70911be1
+          path: rs-event-bus
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-config
+          ref: 80d80b0d3c282bcc441b2c1cff1539941f501594
+          path: rs-config
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-registry
+          ref: 8e8940cc295b0e277241c397bea559214a272fb5
+          path: rs-fs-registry
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-local
+          ref: 7f0959f15355d3be97c681f588f0ab23ce8d40d1
+          path: rs-fs-local
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs
+          ref: 4bc4d9e430719d56429f65224a112d640af51478
+          path: rs-fs
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - name: Record exact source revisions and hashes
+        run: |
+          git -C rs-ioc rev-parse HEAD
+          git -C rs-execution-services rev-parse HEAD
+          git -C rs-event-bus rev-parse HEAD
+          git -C rs-config rev-parse HEAD
+          git -C rs-fs-registry rev-parse HEAD
+          git -C rs-fs-local rev-parse HEAD
+          git -C rs-fs rev-parse HEAD
+          rustc +1.94.0 --version --verbose
+          cargo +1.94.0 --version
+          sha256sum "$(rustup which --toolchain 1.94.0 rustc)"
+          sha256sum rs-ioc/tests/fixtures/application_consumer_current/Cargo.lock
+          sha256sum rs-execution-services/tests/fixtures/ioc_application_consumer/src/*.rs
+          sha256sum rs-execution-services/tests/fixtures/ioc_application_consumer/tests/*.rs
+          sha256sum rs-execution-services/tests/fixtures/ioc_application_consumer/tests/internal/*.rs
+      - name: Verify current consumer IoC feature isolation
+        working-directory: rs-ioc
+        run: python3 .infra/tools/check-manual-feature-isolation.py --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --package ioc-downstream-consumer-current
+      - name: Check downstream consumer against this IoC revision
+        working-directory: rs-ioc
+        run: cargo +1.94.0 check --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
+      - name: Test downstream consumer against this IoC revision
+        working-directory: rs-ioc
+        run: cargo +1.94.0 test --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
+      - name: Run downstream consumer against this IoC revision
+        working-directory: rs-ioc
+        run: cargo +1.94.0 run --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked

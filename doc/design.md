@@ -69,7 +69,7 @@ The IoC fixture treats `ExecutionServices` as a managed resource. On build failu
 
 Normal application shutdown has a different order: stop producers, call `ExecutionServices::shutdown()`, await termination while Tokio remains active, then shut down the IoC context. Repeating stop during context cleanup does not reopen admission.
 
-CI checks this integration against the sibling revisions pinned by the checkout steps in [the ioc-integration workflow](../.github/workflows/ci.yml). The job records each checked-out HEAD for reproducibility. The fixture verifies a cross-crate contract; it is not evidence of production adoption.
+The existing [ioc-integration workflow](../.github/workflows/ci.yml) checks a fixed baseline. The [ioc-current-integration workflow](../.github/workflows/ioc-current-integration.yml) checks this repository revision from the triggering event together with `rs-ioc/main`; its other sibling repositories remain pinned to fixed commits. Its daily schedule also checks combinations where only the downstream IoC repository has changed. Both workflows verify fixture contracts and do not indicate production adoption.
 
 ## Verification
 
