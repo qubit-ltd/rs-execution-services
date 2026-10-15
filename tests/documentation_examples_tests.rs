@@ -37,6 +37,14 @@ fn first_rust_code_block(markdown: &str) -> Option<String> {
     None
 }
 
+fn rust_code_block_containing(markdown: &str, needle: &str) -> Option<String> {
+    markdown
+        .split("```rust\n")
+        .skip(1)
+        .filter_map(|part| part.split_once("\n```").map(|(code, _)| code.to_owned()))
+        .find(|code| code.contains(needle))
+}
+
 #[test]
 fn test_documented_quick_start_examples_match_the_runnable_example() {
     let expected = QUICK_START.trim_end();
@@ -98,6 +106,32 @@ fn test_daily_report_example_is_linked_and_described_in_both_guides() {
         );
     }
     assert!(DAILY_REPORT.contains("fn main()"));
+}
+
+#[test]
+fn test_daily_report_program_and_runtime_features_match_both_guides() {
+    let expected_program = DAILY_REPORT
+        .split("\n#[cfg(test)]")
+        .next()
+        .expect("daily report program must exist")
+        .trim_end();
+    let tokio_dependency = "tokio = { version = \"1.53\", features = [\"rt\", \"rt-multi-thread\", \"time\"] }";
+    for (path, guide) in [
+        ("doc/user_guide.md", ENGLISH_GUIDE),
+        ("doc/user_guide.zh_CN.md", CHINESE_GUIDE),
+    ] {
+        let program = rust_code_block_containing(guide, "fn read_legacy_ledger()")
+            .unwrap_or_else(|| panic!("{path} must contain the complete daily-report program"));
+        assert_eq!(
+            program.trim_end(),
+            expected_program,
+            "daily-report program in {path} drifted"
+        );
+        assert!(
+            guide.contains(tokio_dependency),
+            "{path} must enable the multi-thread runtime"
+        );
+    }
 }
 
 #[test]

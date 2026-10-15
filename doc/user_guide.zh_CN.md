@@ -23,7 +23,7 @@
 ```toml
 [dependencies]
 qubit-execution-services = "0.10.1"
-tokio = { version = "1.53", features = ["rt", "time"] }
+tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 ```
 
 先运行仓库的[入门示例](../examples/quick_start.rs)，确认环境能创建执行域、提交任务并等待结果。它只用计算演示调用路径，随后再接入真实业务：
@@ -152,7 +152,7 @@ pub async fn make_daily_report(
 
 ### 完整可运行程序
 
-可运行的[每日报表示例](../examples/daily_report.rs)用本地适配函数模拟旧账本和异步存储。金额格式错误或累计溢出会作为任务错误返回；真实应用可以替换为自己的依赖，保留执行域选择和关闭顺序。
+可运行的[每日报表示例](../examples/daily_report.rs)用本地适配函数模拟旧账本和异步存储。金额格式错误或累计溢出会作为任务错误返回；真实应用可以替换为自己的依赖，保留执行域选择和关闭顺序。报表成功或任务出错后，`run_report` 都会请求关闭并等待终止，然后返回原结果。
 
 ```rust
 // =============================================================================
@@ -165,6 +165,7 @@ pub async fn make_daily_report(
 //! Demonstrates reading, calculating, and saving a daily report across domains.
 
 use std::io;
+
 use qubit_execution_services::ExecutionServices;
 use tokio::runtime::Handle;
 
@@ -194,6 +195,15 @@ async fn save_report(report: DailyReport) -> io::Result<u64> {
     Ok(report.total_cents)
 }
 
+async fn finish_report(
+    services: &ExecutionServices,
+    result: Result<u64, Box<dyn std::error::Error>>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
 async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> {
     let services = ExecutionServices::builder()
         .runtime(runtime)
@@ -204,14 +214,17 @@ async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> 
         .cpu_threads(1)
         .build()?;
 
-    let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
-    let report = services
-        .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
-        .await?;
-    let saved = services.spawn_io(async move { save_report(report).await })?.await?;
-    services.shutdown();
-    services.await_termination().await;
-    Ok(saved)
+    let result = async {
+        let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
+        let report = services
+            .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
+            .await?;
+        let saved = services.spawn_io(async move { save_report(report).await })?.await?;
+        Ok::<u64, Box<dyn std::error::Error>>(saved)
+    }
+    .await;
+
+    finish_report(&services, result).await
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {

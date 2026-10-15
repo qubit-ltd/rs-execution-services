@@ -55,7 +55,7 @@ The crate requires Rust 1.94 or newer. Add the published crate to the applicatio
 ```toml
 [dependencies]
 qubit-execution-services = "0.10.1"
-tokio = { version = "1.53", features = ["rt", "time"] }
+tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 ```
 
 This repository resolves `qubit-thread-pool`, `qubit-rayon-executor`, and `qubit-tokio-executor` from crates.io using the version requirements in `Cargo.toml`. Publishing requires the matching dependency versions to be available in the registry.
@@ -198,7 +198,7 @@ If reading, totaling, or saving fails, handle the submission error or task error
 
 ### Complete runnable program
 
-The runnable [`daily_report` example](../examples/daily_report.rs) uses local adapters to stand in for a legacy ledger and an async store. Its calculation returns an error for invalid amounts or overflow; a real application replaces those adapters with its own dependencies while keeping the domain routing and shutdown order.
+The runnable [`daily_report` example](../examples/daily_report.rs) uses local adapters to stand in for a legacy ledger and an async store. Its calculation returns an error for invalid amounts or overflow; a real application replaces those adapters with its own dependencies while keeping the domain routing and shutdown order. After services are built, `run_report` requests shutdown and awaits termination after either a successful report or a task error, then returns the original result.
 
 ```rust
 // =============================================================================
@@ -211,6 +211,7 @@ The runnable [`daily_report` example](../examples/daily_report.rs) uses local ad
 //! Demonstrates reading, calculating, and saving a daily report across domains.
 
 use std::io;
+
 use qubit_execution_services::ExecutionServices;
 use tokio::runtime::Handle;
 
@@ -240,6 +241,15 @@ async fn save_report(report: DailyReport) -> io::Result<u64> {
     Ok(report.total_cents)
 }
 
+async fn finish_report(
+    services: &ExecutionServices,
+    result: Result<u64, Box<dyn std::error::Error>>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
 async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> {
     let services = ExecutionServices::builder()
         .runtime(runtime)
@@ -250,14 +260,17 @@ async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> 
         .cpu_threads(1)
         .build()?;
 
-    let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
-    let report = services
-        .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
-        .await?;
-    let saved = services.spawn_io(async move { save_report(report).await })?.await?;
-    services.shutdown();
-    services.await_termination().await;
-    Ok(saved)
+    let result = async {
+        let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
+        let report = services
+            .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
+            .await?;
+        let saved = services.spawn_io(async move { save_report(report).await })?.await?;
+        Ok::<u64, Box<dyn std::error::Error>>(saved)
+    }
+    .await;
+
+    finish_report(&services, result).await
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
