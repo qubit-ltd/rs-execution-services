@@ -38,6 +38,15 @@ async fn save_report(report: DailyReport) -> io::Result<u64> {
     Ok(report.total_cents)
 }
 
+async fn finish_report(
+    services: &ExecutionServices,
+    result: Result<u64, Box<dyn std::error::Error>>,
+) -> Result<u64, Box<dyn std::error::Error>> {
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
 async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> {
     let services = ExecutionServices::builder()
         .runtime(runtime)
@@ -48,14 +57,17 @@ async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> 
         .cpu_threads(1)
         .build()?;
 
-    let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
-    let report = services
-        .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
-        .await?;
-    let saved = services.spawn_io(async move { save_report(report).await })?.await?;
-    services.shutdown();
-    services.await_termination().await;
-    Ok(saved)
+    let result = async {
+        let ledger = services.submit_blocking_callable(read_legacy_ledger)?.await?;
+        let report = services
+            .submit_cpu_callable(move || calculate_daily_report(String::from("2026-09-28"), ledger.clone()))?
+            .await?;
+        let saved = services.spawn_io(async move { save_report(report).await })?.await?;
+        Ok::<u64, Box<dyn std::error::Error>>(saved)
+    }
+    .await;
+
+    finish_report(&services, result).await
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -63,4 +75,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let total_cents = runtime.block_on(run_report(runtime.handle().clone()))?;
     assert_eq!(total_cents, 350);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+
+    use qubit_execution_services::ExecutionServices;
+
+    use super::finish_report;
+
+    #[tokio::test]
+    async fn failed_report_still_terminates_services() {
+        let services = ExecutionServices::builder()
+            .enable_blocking()
+            .blocking_pool_size(1)
+            .build()
+            .expect("blocking services should build");
+        let failure = io::Error::other("ledger failed");
+
+        let result = finish_report(&services, Err(Box::new(failure))).await;
+
+        assert_eq!(
+            result.expect_err("original error should be returned").to_string(),
+            "ledger failed"
+        );
+        assert!(services.is_terminated());
+    }
 }
