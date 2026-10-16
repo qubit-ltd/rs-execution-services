@@ -42,26 +42,6 @@ jobs:
           repository: qubit-ltd/rs-ioc
           ref: eba48898cbb1d162924fdc5eb85c17c5d02eccc0
           path: rs-ioc
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: qubit-ltd/rs-event-bus
-          ref: 563552b58fe5cfa93f0f4f4295e7ca4e70911be1
-          path: rs-event-bus
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: qubit-ltd/rs-fs-registry
-          ref: 8e8940cc295b0e277241c397bea559214a272fb5
-          path: rs-fs-registry
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: qubit-ltd/rs-fs-local
-          ref: 7f0959f15355d3be97c681f588f0ab23ce8d40d1
-          path: rs-fs-local
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
-        with:
-          repository: qubit-ltd/rs-fs
-          ref: 4bc4d9e430719d56429f65224a112d640af51478
-          path: rs-fs
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.94.0
@@ -70,7 +50,7 @@ jobs:
         run: rustup component add clippy --toolchain 1.94.0
       - name: Record exact IoC consumer sources
         run: |
-          for repository in rs-execution-services rs-ioc rs-event-bus rs-fs-registry rs-fs-local rs-fs; do
+          for repository in rs-execution-services rs-ioc; do
             git -C "../$repository" rev-parse HEAD
           done
           rustc +1.94.0 --version --verbose
