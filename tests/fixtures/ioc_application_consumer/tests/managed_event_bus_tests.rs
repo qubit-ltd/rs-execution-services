@@ -69,9 +69,7 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
             .interceptor(move |delivery, next| {
                 let payload = delivery.payload().clone();
                 let result = next(delivery);
-                ended_tx
-                    .send(payload)
-                    .expect("handler completion receiver");
+                ended_tx.send(payload).expect("handler completion receiver");
                 result
             })
             .build();
@@ -97,7 +95,10 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
                 },
             )
             .expect("subscription");
-        let _ = bus.publish(PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"))
+        let _ = bus
+            .publish(
+                PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"),
+            )
             .expect("publish");
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
@@ -138,7 +139,10 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
             .await
             .expect("nonblocking request guard")
             .expect("request task");
-        assert!(ended_rx.try_recv().is_err(), "handler remains gated after requests");
+        assert!(
+            ended_rx.try_recv().is_err(),
+            "handler remains gated after requests"
+        );
         assert!(
             pin!(shutdown.wait())
                 .as_mut()

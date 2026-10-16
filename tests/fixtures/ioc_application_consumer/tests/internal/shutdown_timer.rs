@@ -76,14 +76,18 @@ impl Timers {
     /// Returns distinct graceful and termination budgets without reading time.
     pub fn policy(&self) -> WaitPolicy {
         let timers = self.clone();
-        WaitPolicy::bounded(Duration::from_secs(13), Duration::from_secs(7), move |duration| {
-            let gate = Gate::default();
-            timers.calls.lock().expect("timers lock").push(TimerCall {
-                duration,
-                gate: gate.clone(),
-            });
-            Box::pin(gate)
-        })
+        WaitPolicy::bounded(
+            Duration::from_secs(13),
+            Duration::from_secs(7),
+            move |duration| {
+                let gate = Gate::default();
+                timers.calls.lock().expect("timers lock").push(TimerCall {
+                    duration,
+                    gate: gate.clone(),
+                });
+                Box::pin(gate)
+            },
+        )
     }
 
     /// Returns per-component and total budgets, recording each created timer.
@@ -123,5 +127,7 @@ impl Timers {
 
 /// Polls once and drops the borrowed wait future to model caller cancellation.
 pub fn poll_once<F: Future>(future: F) -> Poll<F::Output> {
-    pin!(future).as_mut().poll(&mut Context::from_waker(Waker::noop()))
+    pin!(future)
+        .as_mut()
+        .poll(&mut Context::from_waker(Waker::noop()))
 }

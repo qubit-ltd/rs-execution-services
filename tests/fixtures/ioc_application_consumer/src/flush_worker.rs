@@ -25,38 +25,36 @@ use tokio::sync::mpsc;
 
 /// Owns the final-report subscription and observable business results.
 pub struct FlushWorker {
+    /// Keeps the execution runtime available while graceful cleanup publishes.
     services: Arc<ExecutionServices>,
+    /// Publishes the final report observed by this worker's subscription.
     bus: Arc<EventBus>,
+    /// Identifies the topic used for final-report publication.
     topic: Topic<String>,
+    /// Keeps the report handler subscribed until cleanup completes.
     _subscription: Subscription,
+    /// Stores report payloads received during cleanup.
     received: Mutex<Vec<String>>,
+    /// Holds the receiver until graceful cleanup consumes the final payload.
     receiver: Mutex<Option<mpsc::UnboundedReceiver<String>>>,
+    /// Stores the result returned by the final publication task.
     result: Mutex<Option<u64>>,
+    /// Counts graceful cleanup requests for this worker.
     graceful: AtomicUsize,
 }
 impl FlushWorker {
-    /// Returns handler acknowledgements retained after the final flush.
-    pub fn messages(&self) -> Vec<String> {
-        self.received.lock().expect("messages lock").clone()
-    }
-    /// Returns the completed final task result, or `None` before graceful
-    /// flush.
-    pub fn final_task_result(&self) -> Option<u64> {
-        *self.result.lock().expect("result lock")
-    }
-    /// Counts graceful requests; Immediate must leave this at zero.
-    pub fn graceful_requests(&self) -> usize {
-        self.graceful.load(Ordering::SeqCst)
-    }
-
     /// Subscribes to real final-report messages; invalid bus state is a factory
     /// error.
-    pub(crate) fn managed(services: Arc<ExecutionServices>, bus: Arc<EventBus>) -> Result<Managed<Self>, FactoryError> {
+    pub(crate) fn managed(
+        services: Arc<ExecutionServices>,
+        bus: Arc<EventBus>,
+    ) -> Result<Managed<Self>, FactoryError> {
         let topic = Topic::<String>::new("reports.final").map_err(FactoryError::new)?;
         let (sender, receiver) = mpsc::unbounded_channel();
         let subscription = bus
             .subscribe(
-                SubscribeRequest::new("report-recorder", topic.clone()).map_err(FactoryError::new)?,
+                SubscribeRequest::new("report-recorder", topic.clone())
+                    .map_err(FactoryError::new)?,
                 move |delivery| {
                     let _ = sender.send(delivery.payload().clone());
                 },
@@ -72,10 +70,14 @@ impl FlushWorker {
             result: Mutex::new(None),
             graceful: AtomicUsize::new(0),
         });
-        Ok(Managed::asynchronous_with_graceful(worker, |_| Ok(()), |worker| {
+        Ok(Managed::asynchronous_with_graceful(
+            worker,
+            |_| Ok(()),
+            |worker| {
                 worker.graceful.fetch_add(1, Ordering::SeqCst);
                 Ok(())
-            }, |worker| {
+            },
+            |worker| {
                 Box::pin(async move {
                     if worker.graceful_requests() == 0 {
                         return Ok(());
@@ -91,24 +93,62 @@ impl FlushWorker {
                         .spawn_io(async move {
                             let request = PublishRequest::new(topic, "final-report:22".to_owned())
                                 .map_err(std::io::Error::other)?;
-                            let _ = bus.publish_checked(request, AdmissionRequirement::AtLeastOneAccepted)
+                            let _ = bus
+                                .publish_checked(request, AdmissionRequirement::AtLeastOneAccepted)
                                 .map_err(std::io::Error::other)?;
                             Ok::<u64, std::io::Error>(22)
                         })
                         .map_err(CleanupError::new)?;
                     let result = task.await.map_err(CleanupError::new)?;
                     *worker.result.lock().expect("result lock") = Some(result);
-                    let mut receiver =
-                        worker.receiver.lock().expect("receiver lock").take().ok_or_else(|| {
-                            CleanupError::new(std::io::Error::other("final receiver already consumed"))
+                    let mut receiver = worker
+                        .receiver
+                        .lock()
+                        .expect("receiver lock")
+                        .take()
+                        .ok_or_else(|| {
+                            CleanupError::new(std::io::Error::other(
+                                "final receiver already consumed",
+                            ))
                         })?;
-                    let message = tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
-                        .await
-                        .map_err(|_| CleanupError::new(std::io::Error::other("final handler wait timed out")))?
-                        .ok_or_else(|| CleanupError::new(std::io::Error::other("final handler channel closed")))?;
+                    let message =
+                        tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
+                            .await
+                            .map_err(|_| {
+                                CleanupError::new(std::io::Error::other(
+                                    "final handler wait timed out",
+                                ))
+                            })?
+                            .ok_or_else(|| {
+                                CleanupError::new(std::io::Error::other(
+                                    "final handler channel closed",
+                                ))
+                            })?;
                     worker.received.lock().expect("messages lock").push(message);
                     Ok(())
                 })
-            }))
+            },
+        ))
+    }
+}
+
+impl FlushWorker {
+    /// Returns handler acknowledgements retained after the final flush.
+    #[must_use]
+    #[inline]
+    pub fn messages(&self) -> Vec<String> {
+        self.received.lock().expect("messages lock").clone()
+    }
+    /// Returns the completed final task result, or `None` before graceful
+    /// flush.
+    #[inline]
+    pub fn final_task_result(&self) -> Option<u64> {
+        *self.result.lock().expect("result lock")
+    }
+    /// Counts graceful requests; Immediate must leave this at zero.
+    #[must_use]
+    #[inline]
+    pub fn graceful_requests(&self) -> usize {
+        self.graceful.load(Ordering::SeqCst)
     }
 }
