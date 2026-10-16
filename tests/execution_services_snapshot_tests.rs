@@ -26,8 +26,8 @@ async fn test_snapshot_reports_only_enabled_domains_and_configured_capacities() 
         .blocking_queue_capacity(2)
         .cpu_threads(1)
         .cpu_task_capacity(3)
-        .tokio_blocking_task_capacity(NonZeroUsize::new(4).unwrap())
-        .io_task_capacity(NonZeroUsize::new(5).unwrap())
+        .tokio_blocking_task_capacity(NonZeroUsize::new(4).expect("Tokio blocking task capacity should be nonzero"))
+        .io_task_capacity(NonZeroUsize::new(5).expect("IO task capacity should be nonzero"))
         .build()
         .expect("all domains should build");
     let io = services
@@ -37,17 +37,33 @@ async fn test_snapshot_reports_only_enabled_domains_and_configured_capacities() 
         })
         .expect("pending IO task should be accepted");
     let snapshot = services.snapshot();
-    assert_eq!(snapshot.blocking.unwrap().queue_capacity, Some(2));
-    assert_eq!(snapshot.cpu.unwrap().task_capacity, 3);
-    assert_eq!(snapshot.tokio_blocking.unwrap().task_capacity, 4);
-    assert_eq!(snapshot.io.unwrap().task_capacity, 5);
-    assert_eq!(snapshot.io.unwrap().accepted_unfinished, 1);
+    assert_eq!(
+        snapshot
+            .blocking
+            .expect("blocking domain should be enabled")
+            .queue_capacity,
+        Some(2)
+    );
+    assert_eq!(snapshot.cpu.expect("CPU domain should be enabled").task_capacity, 3);
+    assert_eq!(
+        snapshot
+            .tokio_blocking
+            .expect("Tokio blocking domain should be enabled")
+            .task_capacity,
+        4
+    );
+    assert_eq!(snapshot.io.expect("IO domain should be enabled").task_capacity, 5);
+    assert_eq!(snapshot.io.expect("IO domain should be enabled").accepted_unfinished, 1);
     let report = services.stop();
     assert!(report.io.expect("IO domain should be enabled").cancelled > 0);
     services.await_termination().await;
     assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
     assert_eq!(
-        services.snapshot().io.unwrap().lifecycle,
+        services
+            .snapshot()
+            .io
+            .expect("IO domain should remain enabled")
+            .lifecycle,
         ExecutorServiceLifecycle::Terminated
     );
 }

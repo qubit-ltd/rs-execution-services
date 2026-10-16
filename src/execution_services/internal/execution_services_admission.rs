@@ -99,8 +99,12 @@ impl ExecutionServicesAdmission {
     ///
     /// # Returns
     ///
-    /// The closure's value, or a shutdown error if facade admission is closed.
-    /// Errors returned by the closure are passed through unchanged.
+    /// The value produced by the submission closure when it succeeds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a shutdown error when facade admission is closed. Otherwise,
+    /// returns any error produced by the closure unchanged.
     pub fn admit<R, E: From<SubmissionError>>(&self, submit: impl FnOnce() -> Result<R, E>) -> Result<R, E> {
         let accepting = {
             let intent = lock_intent(&self.intent);
@@ -250,16 +254,28 @@ mod tests {
         let admission = ExecutionServicesAdmission::new();
         let accepted = admission.admit(|| Ok::<_, SubmissionError>(7));
         assert_eq!(accepted, Ok(7));
-        assert!(admission.intent() == FacadeIntent::Running);
+        assert!(
+            admission.intent() == FacadeIntent::Running,
+            "new admission should accept submissions"
+        );
 
         admission.request_shutdown();
-        assert!(admission.intent() == FacadeIntent::ShuttingDown);
+        assert!(
+            admission.intent() == FacadeIntent::ShuttingDown,
+            "graceful shutdown should be recorded"
+        );
         assert_eq!(admission.admit(|| Ok(9)), Err(SubmissionError::Shutdown));
 
         admission.request_stop();
-        assert!(admission.intent() == FacadeIntent::Stopping);
+        assert!(
+            admission.intent() == FacadeIntent::Stopping,
+            "stop should upgrade graceful shutdown"
+        );
         admission.request_shutdown();
-        assert!(admission.intent() == FacadeIntent::Stopping);
+        assert!(
+            admission.intent() == FacadeIntent::Stopping,
+            "graceful shutdown should not downgrade stop"
+        );
         assert_eq!(admission.lifecycle([Some(Running); 4]), Stopping);
     }
 
@@ -271,7 +287,10 @@ mod tests {
             Err::<(), _>(SubmissionError::Saturated)
         });
         assert_eq!(result, Err(SubmissionError::Saturated));
-        assert!(admission.intent() == FacadeIntent::ShuttingDown);
+        assert!(
+            admission.intent() == FacadeIntent::ShuttingDown,
+            "callback should be able to request shutdown"
+        );
     }
 
     #[test]
@@ -282,6 +301,9 @@ mod tests {
             panic!("poison admission lock");
         });
 
-        assert!(*lock_intent(&intent) == FacadeIntent::Running);
+        assert!(
+            *lock_intent(&intent) == FacadeIntent::Running,
+            "poison recovery should preserve the recorded intent"
+        );
     }
 }

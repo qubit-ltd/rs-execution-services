@@ -892,15 +892,15 @@ async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
             .runtime(Handle::current())
             .cpu_threads(1)
             .build()
-            .unwrap(),
+            .expect("execution services should be created"),
     );
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let child_services = Arc::clone(&services);
     let parent = services
         .spawn_io(async move {
-            started_tx.send(()).unwrap();
-            release_rx.await.unwrap();
+            started_tx.send(()).expect("parent task should report that it started");
+            release_rx.await.expect("parent task should be released");
             let result = child_services.submit_cpu_callable(|| Ok::<u8, io::Error>(42));
             assert!(matches!(
                 result,
@@ -910,12 +910,12 @@ async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
             ));
             Ok::<(), io::Error>(())
         })
-        .unwrap();
+        .expect("IO parent task should be accepted");
 
-    started_rx.await.unwrap();
+    started_rx.await.expect("parent task should report that it started");
     services.shutdown();
-    release_tx.send(()).unwrap();
-    parent.await.unwrap();
+    release_tx.send(()).expect("parent task should be released");
+    parent.await.expect("parent task should complete");
     services.await_termination().await;
     assert!(services.is_terminated());
 }
@@ -929,23 +929,27 @@ async fn test_drain_producer_before_shutdown_allows_child_submission() {
             .runtime(Handle::current())
             .cpu_threads(1)
             .build()
-            .unwrap(),
+            .expect("execution services should be created"),
     );
     let (started_tx, started_rx) = oneshot::channel();
     let (release_tx, release_rx) = oneshot::channel();
     let child_services = Arc::clone(&services);
     let producer = services
         .spawn_io(async move {
-            started_tx.send(()).unwrap();
-            release_rx.await.unwrap();
-            let child = child_services.submit_cpu_callable(|| Ok::<u8, io::Error>(42)).unwrap();
-            Ok::<u8, io::Error>(child.await.unwrap())
+            started_tx
+                .send(())
+                .expect("producer task should report that it started");
+            release_rx.await.expect("producer task should be released");
+            let child = child_services
+                .submit_cpu_callable(|| Ok::<u8, io::Error>(42))
+                .expect("child CPU task should be accepted before shutdown");
+            Ok::<u8, io::Error>(child.await.expect("child CPU task should complete"))
         })
-        .unwrap();
+        .expect("IO producer task should be accepted");
 
-    started_rx.await.unwrap();
-    release_tx.send(()).unwrap();
-    assert_eq!(producer.await.unwrap(), 42);
+    started_rx.await.expect("producer task should report that it started");
+    release_tx.send(()).expect("producer task should be released");
+    assert_eq!(producer.await.expect("producer task should complete"), 42);
     services.shutdown();
     services.await_termination().await;
     assert!(services.is_terminated());
