@@ -7,8 +7,7 @@
 // =============================================================================
 //! Verifies shutdown deadlines through public IoC and real execution services.
 
-#[path = "internal/shutdown_timer.rs"]
-mod shutdown_timer;
+mod internal;
 
 use std::future::Future;
 use std::io;
@@ -35,9 +34,9 @@ use tokio::runtime::Runtime;
 use tokio::sync::oneshot;
 use tokio::time::timeout;
 
-use shutdown_timer::Gate;
-use shutdown_timer::Timers;
-use shutdown_timer::poll_once;
+use crate::internal::shutdown_timer::Gate;
+use crate::internal::shutdown_timer::Timers;
+use crate::internal::shutdown_timer::poll_once;
 
 /// Reports destruction of a running task after execution services abort it.
 struct TaskGuard {
@@ -70,9 +69,7 @@ fn runtime() -> Runtime {
 fn builder(runtime: Handle, timers: &Timers) -> ContainerBuilder {
     let mut builder = ContainerBuilder::new().wait_policy(timers.policy());
     builder
-        .register_managed_factory::<ExecutionServices, _>(&[], move |_| {
-            managed_execution_services(runtime)
-        })
+        .register_managed_factory::<ExecutionServices, _>(&[], move |_| managed_execution_services(runtime))
         .expect("register real execution services adapter");
     builder
 }
@@ -81,9 +78,7 @@ fn builder(runtime: Handle, timers: &Timers) -> ContainerBuilder {
 fn builder_with_total(runtime: Handle, timers: &Timers, total: Duration) -> ContainerBuilder {
     let mut builder = ContainerBuilder::new().wait_policy(timers.policy_with_total(total));
     builder
-        .register_managed_factory::<ExecutionServices, _>(&[], move |_| {
-            managed_execution_services(runtime)
-        })
+        .register_managed_factory::<ExecutionServices, _>(&[], move |_| managed_execution_services(runtime))
         .expect("register real execution services adapter");
     builder
 }
@@ -106,17 +101,12 @@ fn test_grace_timeout_aborts_running_execution_service_task() {
         let application = builder(runtime.handle().clone(), &timers)
             .build_all()
             .expect("build execution services application");
-        let services = application
-            .context()
-            .get::<ExecutionServices>()
-            .expect("services");
+        let services = application.context().get::<ExecutionServices>().expect("services");
         let (started_tx, started_rx) = oneshot::channel();
         let (ended_tx, ended_rx) = oneshot::channel();
         let task = services
             .spawn_io(async move {
-                let _guard = TaskGuard {
-                    ended: Some(ended_tx),
-                };
+                let _guard = TaskGuard { ended: Some(ended_tx) };
                 started_tx.send(()).expect("startup receiver alive");
                 std::future::pending::<()>().await;
                 Ok::<(), io::Error>(())
@@ -130,22 +120,12 @@ fn test_grace_timeout_aborts_running_execution_service_task() {
         assert_eq!(timers.durations(), [Duration::from_secs(13)]);
         timers.trigger(0);
 
-        let error = guarded(shutdown.wait())
-            .await
-            .expect_err("grace deadline recorded");
-        guarded(ended_rx)
-            .await
-            .expect("aborted task released its guard");
-        assert!(
-            guarded(task).await.is_err(),
-            "aborted IO task cannot succeed"
-        );
+        let error = guarded(shutdown.wait()).await.expect_err("grace deadline recorded");
+        guarded(ended_rx).await.expect("aborted task released its guard");
+        assert!(guarded(task).await.is_err(), "aborted IO task cannot succeed");
         assert!(services.is_terminated());
         assert_eq!(error.report().failures().len(), 1);
-        assert_eq!(
-            error.report().failures()[0].phase,
-            ShutdownPhase::GracefulWait
-        );
+        assert_eq!(error.report().failures()[0].phase, ShutdownPhase::GracefulWait);
         assert_eq!(
             error.report().failures()[0].key,
             BindingKey::of::<ExecutionServices>(None)
@@ -153,10 +133,7 @@ fn test_grace_timeout_aborts_running_execution_service_task() {
         assert!(error.report().incomplete().is_empty());
         assert!(error.report().is_complete());
         assert!(!error.report().is_success());
-        assert_eq!(
-            timers.durations(),
-            [Duration::from_secs(13), Duration::from_secs(7)]
-        );
+        assert_eq!(timers.durations(), [Duration::from_secs(13), Duration::from_secs(7)]);
         assert!(matches!(
             services.spawn_io(async { Ok::<(), io::Error>(()) }),
             Err(ExecutionServicesSubmissionError::Rejected { .. })
@@ -175,26 +152,20 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
         let observed_aborts = Arc::clone(&aborts);
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
-            .register_managed_factory::<WaitingConsumer, _>(
-                &[Dependency::of::<ExecutionServices>()],
-                move |_| {
-                    Ok(Managed::asynchronous_with_graceful(
-                        Arc::new(WaitingConsumer),
-                        move |_| {
-                            observed_aborts.fetch_add(1, Ordering::SeqCst);
-                            Ok(())
-                        },
-                        |_| Ok(()),
-                        |_| Box::pin(std::future::pending()),
-                    ))
-                },
-            )
+            .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
+                Ok(Managed::asynchronous_with_graceful(
+                    Arc::new(WaitingConsumer),
+                    move |_| {
+                        observed_aborts.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    |_| Ok(()),
+                    |_| Box::pin(std::future::pending()),
+                ))
+            })
             .expect("register pending dependent consumer");
         let application = builder.build_all().expect("build dependency graph");
-        let services = application
-            .context()
-            .get::<ExecutionServices>()
-            .expect("services");
+        let services = application.context().get::<ExecutionServices>().expect("services");
         let (started_tx, started_rx) = oneshot::channel();
         let release_task = Gate::default();
         let task_gate = release_task.clone();
@@ -205,9 +176,7 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
                 Ok::<u32, io::Error>(43)
             })
             .expect("submit task to dependency");
-        guarded(started_rx)
-            .await
-            .expect("dependency task has started");
+        guarded(started_rx).await.expect("dependency task has started");
 
         let mut shutdown = application.begin_shutdown(ShutdownMode::Graceful);
         assert!(poll_once(shutdown.wait()).is_pending());
@@ -223,28 +192,17 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
             "consumer abort does not close dependencies early"
         );
         assert_eq!(aborts.load(Ordering::SeqCst), 1);
-        assert_eq!(
-            timers.durations(),
-            [Duration::from_secs(13), Duration::from_secs(7)]
-        );
+        assert_eq!(timers.durations(), [Duration::from_secs(13), Duration::from_secs(7)]);
         release_task.trigger();
         assert_eq!(guarded(task).await.expect("dependency task completes"), 43);
         timers.trigger(1);
 
-        let error = guarded(shutdown.wait())
-            .await
-            .expect_err("consumer remains incomplete");
+        let error = guarded(shutdown.wait()).await.expect_err("consumer remains incomplete");
         assert!(services.is_terminated());
         assert_eq!(aborts.load(Ordering::SeqCst), 1);
         assert_eq!(error.report().failures().len(), 2);
-        assert_eq!(
-            error.report().failures()[0].phase,
-            ShutdownPhase::GracefulWait
-        );
-        assert_eq!(
-            error.report().failures()[1].phase,
-            ShutdownPhase::TerminationWait
-        );
+        assert_eq!(error.report().failures()[0].phase, ShutdownPhase::GracefulWait);
+        assert_eq!(error.report().failures()[1].phase, ShutdownPhase::TerminationWait);
         assert_eq!(
             error.report().failures()[0].key,
             BindingKey::of::<WaitingConsumer>(None)
@@ -253,19 +211,12 @@ fn test_termination_timeout_continues_to_execution_services_dependency() {
             error.report().failures()[1].key,
             BindingKey::of::<WaitingConsumer>(None)
         );
-        assert_eq!(
-            error.report().incomplete(),
-            [BindingKey::of::<WaitingConsumer>(None)]
-        );
+        assert_eq!(error.report().incomplete(), [BindingKey::of::<WaitingConsumer>(None)]);
         assert!(error.report().fallbacks().is_empty());
         assert!(!error.report().is_complete());
         assert_eq!(
             timers.durations(),
-            [
-                Duration::from_secs(13),
-                Duration::from_secs(7),
-                Duration::from_secs(13)
-            ]
+            [Duration::from_secs(13), Duration::from_secs(7), Duration::from_secs(13)]
         );
     });
 }
@@ -287,35 +238,29 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
         let observed_aborts = Arc::clone(&aborts);
         let mut builder = builder(runtime.handle().clone(), &timers);
         builder
-            .register_managed_factory::<WaitingConsumer, _>(
-                &[Dependency::of::<ExecutionServices>()],
-                move |_| {
-                    Ok(Managed::asynchronous_with_graceful(
-                        Arc::new(WaitingConsumer),
-                        move |_| {
-                            observed_aborts.fetch_add(1, Ordering::SeqCst);
+            .register_managed_factory::<WaitingConsumer, _>(&[Dependency::of::<ExecutionServices>()], move |_| {
+                Ok(Managed::asynchronous_with_graceful(
+                    Arc::new(WaitingConsumer),
+                    move |_| {
+                        observed_aborts.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    move |_| {
+                        observed_graceful.fetch_add(1, Ordering::SeqCst);
+                        Ok(())
+                    },
+                    move |_| {
+                        observed_starts.fetch_add(1, Ordering::SeqCst);
+                        Box::pin(async move {
+                            waiting.await;
                             Ok(())
-                        },
-                        move |_| {
-                            observed_graceful.fetch_add(1, Ordering::SeqCst);
-                            Ok(())
-                        },
-                        move |_| {
-                            observed_starts.fetch_add(1, Ordering::SeqCst);
-                            Box::pin(async move {
-                                waiting.await;
-                                Ok(())
-                            })
-                        },
-                    ))
-                },
-            )
+                        })
+                    },
+                ))
+            })
             .expect("register resumable consumer");
         let application = builder.build_all().expect("build resumable application");
-        let services = application
-            .context()
-            .get::<ExecutionServices>()
-            .expect("services");
+        let services = application.context().get::<ExecutionServices>().expect("services");
         let mut shutdown = application.begin_shutdown(ShutdownMode::Graceful);
         assert!(poll_once(shutdown.wait()).is_pending());
         assert!(poll_once(shutdown.wait()).is_pending());
@@ -329,9 +274,7 @@ fn test_cancelled_wait_reuses_pending_consumer_and_grace_deadline() {
             .expect("dependency accepts work while consumer waits");
         assert_eq!(guarded(task).await.expect("real task result"), 42);
         gate.trigger();
-        let report = guarded(shutdown.wait())
-            .await
-            .expect("resume graceful cleanup");
+        let report = guarded(shutdown.wait()).await.expect("resume graceful cleanup");
         assert!(report.is_success());
         assert!(services.is_terminated());
         assert_eq!(starts.load(Ordering::SeqCst), 1);
@@ -349,25 +292,17 @@ fn test_total_timeout_aborts_execution_services_and_is_reported() {
         let timers = Timers::default();
         let bus = Arc::new(EventBus::local(LocalEventBusConfig::new()).expect("local EventBus"));
         let observed_bus = Arc::clone(&bus);
-        let mut builder =
-            builder_with_total(runtime.handle().clone(), &timers, Duration::from_secs(19));
+        let mut builder = builder_with_total(runtime.handle().clone(), &timers, Duration::from_secs(19));
         builder
             .register_managed_factory::<EventBus, _>(&[], move |_| Ok(managed_event_bus(bus)))
             .expect("register EventBus lifecycle adapter");
-        let application = builder
-            .build_all()
-            .expect("build execution services application");
-        let services = application
-            .context()
-            .get::<ExecutionServices>()
-            .expect("services");
+        let application = builder.build_all().expect("build execution services application");
+        let services = application.context().get::<ExecutionServices>().expect("services");
         let (started_tx, started_rx) = oneshot::channel();
         let (ended_tx, ended_rx) = oneshot::channel();
         let task = services
             .spawn_io(async move {
-                let _guard = TaskGuard {
-                    ended: Some(ended_tx),
-                };
+                let _guard = TaskGuard { ended: Some(ended_tx) };
                 started_tx.send(()).expect("startup receiver alive");
                 std::future::pending::<()>().await;
                 Ok::<(), io::Error>(())
@@ -376,46 +311,25 @@ fn test_total_timeout_aborts_execution_services_and_is_reported() {
         guarded(started_rx).await.expect("task has started");
         let mut shutdown = application.begin_shutdown(ShutdownMode::Graceful);
         assert!(poll_once(shutdown.wait()).is_pending());
-        assert_eq!(
-            timers.durations(),
-            [Duration::from_secs(19), Duration::from_secs(13)]
-        );
+        assert_eq!(timers.durations(), [Duration::from_secs(19), Duration::from_secs(13)]);
         assert!(poll_once(shutdown.wait()).is_pending());
-        assert_eq!(
-            timers.durations(),
-            [Duration::from_secs(19), Duration::from_secs(13)]
-        );
+        assert_eq!(timers.durations(), [Duration::from_secs(19), Duration::from_secs(13)]);
 
         timers.trigger(0);
-        let error = guarded(shutdown.wait())
-            .await
-            .expect_err("total deadline recorded");
-        guarded(ended_rx)
-            .await
-            .expect("aborted task released its guard");
-        assert!(
-            guarded(task).await.is_err(),
-            "aborted IO task cannot succeed"
-        );
+        let error = guarded(shutdown.wait()).await.expect_err("total deadline recorded");
+        guarded(ended_rx).await.expect("aborted task released its guard");
+        assert!(guarded(task).await.is_err(), "aborted IO task cannot succeed");
         assert!(services.is_terminated());
         assert!(error.report().overall_failure().is_some());
         assert!(!error.report().is_success());
         assert_eq!(error.report().mode(), ShutdownMode::Graceful);
-        assert!(
-            error
-                .report()
-                .incomplete()
-                .contains(&BindingKey::of::<EventBus>(None))
-        );
+        assert!(error.report().incomplete().contains(&BindingKey::of::<EventBus>(None)));
         let ticket = observed_bus
             .request_shutdown(qubit_event_bus::spi::ShutdownMode::Immediate)
             .expect("retrieve the same EventBus shutdown generation");
         let report = guarded(ticket.wait_async())
             .await
             .expect("EventBus completes after the Immediate upgrade");
-        assert_eq!(
-            report.outcome,
-            qubit_event_bus::spi::ShutdownOutcome::Complete
-        );
+        assert_eq!(report.outcome, qubit_event_bus::spi::ShutdownOutcome::Complete);
     });
 }

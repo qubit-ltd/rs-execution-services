@@ -167,6 +167,7 @@ pub async fn make_daily_report(
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
+use tokio::runtime::Builder;
 use tokio::runtime::Handle;
 
 struct DailyReport {
@@ -228,7 +229,7 @@ async fn run_report(runtime: Handle) -> Result<u64, Box<dyn std::error::Error>> 
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
+    let runtime = Builder::new_multi_thread().enable_all().build()?;
     let total_cents = runtime.block_on(run_report(runtime.handle().clone()))?;
     assert_eq!(total_cents, 350);
     Ok(())

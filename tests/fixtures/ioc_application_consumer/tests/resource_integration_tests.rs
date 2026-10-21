@@ -55,7 +55,10 @@ fn test_registry_resolves_real_report_metadata() {
     let registry = application.context().get::<FileSystemRegistry>().expect("registry");
     let config = FileSystemConfig::new(ConnectionUri::parse("file:///report.csv").expect("uri"));
     let resolution = registry.resolve_config(&config).expect("resolve report");
-    assert_eq!(resolution.file_system().stat(resolution.path()).expect("stat").len(), Some(22));
+    assert_eq!(
+        resolution.file_system().stat(resolution.path()).expect("stat").len(),
+        Some(22)
+    );
     assert_eq!(resolution.canonical_uri().as_str(), "file:///report.csv");
     let mut shutdown = application.begin_shutdown(ShutdownMode::Immediate);
     assert!(runtime.block_on(shutdown.wait()).expect("report").is_success());

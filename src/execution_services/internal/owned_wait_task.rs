@@ -49,6 +49,8 @@ impl<T> OwnedWaitTask<T> {
     ///
     /// * `R` - Successful output type produced by the callable.
     /// * `E` - Error type produced by the callable.
+    #[must_use = "the task runs only when the returned callable is submitted"]
+    #[inline]
     pub(in crate::execution_services) fn callable_attempt<R, E>(&self) -> impl FnMut() -> Result<R, E> + Send + 'static
     where
         T: FnOnce() -> Result<R, E> + Send + 'static,
@@ -66,6 +68,7 @@ impl<T> OwnedWaitTask<T> {
     ///
     /// * `R` - Successful output type produced by the future.
     /// * `E` - Error type produced by the future.
+    #[inline]
     pub(in crate::execution_services) fn future_attempt<R, E>(
         &self,
     ) -> impl Future<Output = Result<R, E>> + Send + 'static
