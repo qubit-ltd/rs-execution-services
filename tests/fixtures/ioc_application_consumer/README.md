@@ -1,8 +1,8 @@
 # IoC application consumer fixture
 
 This standalone application exercises the public integration boundary among
-`qubit-ioc` 0.3, `qubit-event-bus` 0.20, `qubit-fs-registry` 0.7,
-`qubit-fs-local` 0.10, `qubit-fs` 0.2, and `qubit-execution-services` 0.10.
+`qubit-ioc` 0.3, `qubit-event-bus` 0.20, `qubit-fs-registry` 0.8,
+`qubit-fs-local` 0.11, `qubit-fs` 0.3, and `qubit-execution-services` 0.10.
 It uses a sibling path for the unpublished `qubit-ioc` crate and the local
 `qubit-execution-services` crate under test. Published EventBus and filesystem
 crates resolve from crates.io. Keep `rs-ioc` as a sibling in the Qubit workspace.
