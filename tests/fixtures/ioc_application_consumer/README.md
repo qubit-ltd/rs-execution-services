@@ -1,13 +1,15 @@
 # IoC application consumer fixture
 
 This standalone application exercises the public integration boundary among
-`qubit-ioc` 0.3, `qubit-event-bus` 0.21, `qubit-fs-registry` 0.8,
+`qubit-ioc` 0.4, `qubit-event-bus` 0.21, `qubit-fs-registry` 0.8,
 `qubit-fs-local` 0.11, `qubit-fs` 0.3, and `qubit-execution-services` 0.10.
-It uses sibling paths for the unpublished `qubit-ioc` crate, the local
-`qubit-execution-services` crate under test, and the current `qubit-event-bus`
-checkout (0.21). Filesystem crates resolve from crates.io. The native fixture
-retains its baseline `qubit-ioc` 0.3 constraint, which does not resolve against
-the current sibling `qubit-ioc` 0.4 checkout. Keep `rs-ioc` as a sibling in the Qubit workspace.
+It temporarily uses sibling path dependencies for the current `qubit-ioc` 0.4,
+`qubit-event-bus` 0.21, and filesystem crate checkouts, plus the local
+`qubit-execution-services` crate under test. These dependencies retain their
+`^0.4`, `^0.21`, and filesystem version requirements alongside their paths so
+Cargo checks the intended API lines. Keep the IoC, EventBus, and filesystem
+repositories as siblings in the Qubit workspace. This validates local
+workspace sources and does not establish published registry compatibility.
 
 From the `rs-execution-services` root, run the same commands as CI:
 
