@@ -6,7 +6,7 @@ This standalone application exercises the public integration boundary among
 It temporarily uses sibling path dependencies for the current `qubit-ioc` 0.4,
 `qubit-event-bus` 0.21, and filesystem crate checkouts, plus the local
 `qubit-execution-services` crate under test. These dependencies retain their
-`^0.4`, `^0.21`, and filesystem version requirements alongside their paths so
+`^0.4.0`, `^0.21`, and filesystem version requirements alongside their paths so
 Cargo checks the intended API lines. Keep the IoC, EventBus, and filesystem
 repositories as siblings in the Qubit workspace. This validates local
 workspace sources and does not establish published registry compatibility.
