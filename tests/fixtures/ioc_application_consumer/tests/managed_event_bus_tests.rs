@@ -17,16 +17,77 @@ use std::time::Duration;
 
 use ioc_application_consumer::managed_event_bus::managed_event_bus;
 use qubit_event_bus::EventBus;
+use qubit_event_bus::error::SpiError;
 use qubit_event_bus::local::LocalEventBusConfig;
+use qubit_event_bus::model::ProviderId;
+use qubit_event_bus::model::PublishAcknowledgement;
 use qubit_event_bus::model::PublishRequest;
 use qubit_event_bus::model::SubscribeOptions;
 use qubit_event_bus::model::SubscribeRequest;
 use qubit_event_bus::model::Topic;
+use qubit_event_bus::spi::DelayedDeliveryCapability;
+use qubit_event_bus::spi::DurabilityCapability;
+use qubit_event_bus::spi::EventBusCapabilities;
+use qubit_event_bus::spi::EventBusSpi;
+use qubit_event_bus::spi::EventSubscriptionSpi;
+use qubit_event_bus::spi::OrderingCapability;
+use qubit_event_bus::spi::OutboundMessage;
+use qubit_event_bus::spi::PayloadModes;
+use qubit_event_bus::spi::PublishGuarantee;
+use qubit_event_bus::spi::PublishVisibility;
+use qubit_event_bus::spi::ReplayCapability;
+use qubit_event_bus::spi::SettlementCapabilities;
+use qubit_event_bus::spi::ShutdownMode;
+use qubit_event_bus::spi::ShutdownOutcome;
+use qubit_event_bus::spi::SpiSubscriptionRequest;
+use qubit_event_bus::spi::SubscriptionModes;
 use qubit_ioc::ContainerBuilder;
 use qubit_ioc::ShutdownMode as IocShutdownMode;
 use qubit_ioc::WaitPolicy;
 use tokio::runtime::Builder;
 use tokio::sync::oneshot;
+
+struct TimedOutProvider;
+
+impl EventBusSpi for TimedOutProvider {
+    fn capabilities(&self) -> EventBusCapabilities {
+        EventBusCapabilities::new(
+            PayloadModes::Native,
+            SettlementCapabilities::None,
+            OrderingCapability::None,
+            DelayedDeliveryCapability::None,
+            DurabilityCapability::Ephemeral,
+            SubscriptionModes::EPHEMERAL,
+            false,
+            ReplayCapability::None,
+            PublishGuarantee::Accepted,
+            PublishVisibility::Opaque,
+        )
+    }
+    fn publish(&self, _: OutboundMessage) -> Result<PublishAcknowledgement, SpiError> {
+        Err(unused_spi("publish"))
+    }
+    fn subscribe(
+        &self,
+        _: SpiSubscriptionRequest,
+    ) -> Result<Box<dyn EventSubscriptionSpi>, SpiError> {
+        Err(unused_spi("subscribe"))
+    }
+    fn shutdown(&self, _: ShutdownMode) -> Result<ShutdownOutcome, SpiError> {
+        Ok(ShutdownOutcome::TimedOut)
+    }
+}
+
+fn unused_spi(operation: &'static str) -> SpiError {
+    SpiError::Operation {
+        provider_id: "test".into(),
+        operation,
+        resource: None,
+        kind: "unused",
+        retryable: Some(false),
+        source: Box::new(std::io::Error::other("unused")),
+    }
+}
 
 /// Ensures a failed assertion always releases the handler before unwinding.
 struct Release {
@@ -177,4 +238,37 @@ fn test_blocked_handler_graceful_request_cancel_resume() {
 #[test]
 fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
     exercise_blocked_handler_shutdown(true);
+}
+
+#[test]
+fn test_provider_timed_out_report_reaches_container_diagnostic() {
+    let bus = Arc::new(
+        EventBus::from_spi(
+            ProviderId::new_static("timed-out-test"),
+            Arc::new(TimedOutProvider),
+        )
+        .expect("fake provider bus"),
+    );
+    let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::unbounded());
+    builder
+        .register_managed_factory::<EventBus, _>(&[], move |_| {
+            Ok(managed_event_bus(Arc::clone(&bus)))
+        })
+        .expect("bus adapter");
+    let application = builder.build_all().expect("application");
+    let mut shutdown = application.begin_shutdown(IocShutdownMode::Graceful);
+    let error = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("runtime")
+        .block_on(shutdown.wait())
+        .expect_err("provider timeout is a cleanup diagnostic");
+    let failures = error.report().failures();
+    assert_eq!(failures.len(), 1);
+    assert!(
+        failures[0]
+            .error
+            .to_string()
+            .contains("ShutdownReport { outcome: TimedOut")
+    );
 }
