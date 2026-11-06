@@ -45,16 +45,12 @@ pub struct FlushWorker {
 impl FlushWorker {
     /// Subscribes to real final-report messages; invalid bus state is a factory
     /// error.
-    pub(crate) fn managed(
-        services: Arc<ExecutionServices>,
-        bus: Arc<EventBus>,
-    ) -> Result<Managed<Self>, FactoryError> {
+    pub(crate) fn managed(services: Arc<ExecutionServices>, bus: Arc<EventBus>) -> Result<Managed<Self>, FactoryError> {
         let topic = Topic::<String>::new("reports.final").map_err(FactoryError::new)?;
         let (sender, receiver) = mpsc::unbounded_channel();
         let subscription = bus
             .subscribe(
-                SubscribeRequest::new("report-recorder", topic.clone())
-                    .map_err(FactoryError::new)?,
+                SubscribeRequest::new("report-recorder", topic.clone()).map_err(FactoryError::new)?,
                 move |delivery| {
                     let _ = sender.send(delivery.payload().clone());
                 },
@@ -101,29 +97,14 @@ impl FlushWorker {
                         .map_err(CleanupError::new)?;
                     let result = task.await.map_err(CleanupError::new)?;
                     *worker.result.lock().expect("result lock") = Some(result);
-                    let mut receiver = worker
-                        .receiver
-                        .lock()
-                        .expect("receiver lock")
-                        .take()
-                        .ok_or_else(|| {
-                            CleanupError::new(std::io::Error::other(
-                                "final receiver already consumed",
-                            ))
+                    let mut receiver =
+                        worker.receiver.lock().expect("receiver lock").take().ok_or_else(|| {
+                            CleanupError::new(std::io::Error::other("final receiver already consumed"))
                         })?;
-                    let message =
-                        tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
-                            .await
-                            .map_err(|_| {
-                                CleanupError::new(std::io::Error::other(
-                                    "final handler wait timed out",
-                                ))
-                            })?
-                            .ok_or_else(|| {
-                                CleanupError::new(std::io::Error::other(
-                                    "final handler channel closed",
-                                ))
-                            })?;
+                    let message = tokio::time::timeout(std::time::Duration::from_secs(3), receiver.recv())
+                        .await
+                        .map_err(|_| CleanupError::new(std::io::Error::other("final handler wait timed out")))?
+                        .ok_or_else(|| CleanupError::new(std::io::Error::other("final handler channel closed")))?;
                     worker.received.lock().expect("messages lock").push(message);
                     Ok(())
                 })

@@ -67,10 +67,7 @@ impl EventBusSpi for TimedOutProvider {
     fn publish(&self, _: OutboundMessage) -> Result<PublishAcknowledgement, SpiError> {
         Err(unused_spi("publish"))
     }
-    fn subscribe(
-        &self,
-        _: SpiSubscriptionRequest,
-    ) -> Result<Box<dyn EventSubscriptionSpi>, SpiError> {
+    fn subscribe(&self, _: SpiSubscriptionRequest) -> Result<Box<dyn EventSubscriptionSpi>, SpiError> {
         Err(unused_spi("subscribe"))
     }
     fn shutdown(&self, _: ShutdownMode) -> Result<ShutdownOutcome, SpiError> {
@@ -157,9 +154,7 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
             )
             .expect("subscription");
         let _ = bus
-            .publish(
-                PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"),
-            )
+            .publish(PublishRequest::new(topic, "real payload".to_owned()).expect("publish request"))
             .expect("publish");
         tokio::time::timeout(Duration::from_secs(5), started_rx)
             .await
@@ -200,10 +195,7 @@ fn exercise_blocked_handler_shutdown(upgrade_to_abort: bool) {
             .await
             .expect("nonblocking request guard")
             .expect("request task");
-        assert!(
-            ended_rx.try_recv().is_err(),
-            "handler remains gated after requests"
-        );
+        assert!(ended_rx.try_recv().is_err(), "handler remains gated after requests");
         assert!(
             pin!(shutdown.wait())
                 .as_mut()
@@ -243,17 +235,12 @@ fn test_blocked_handler_request_cancel_resume_and_abort_upgrade() {
 #[test]
 fn test_provider_timed_out_report_reaches_container_diagnostic() {
     let bus = Arc::new(
-        EventBus::from_spi(
-            ProviderId::new_static("timed-out-test"),
-            Arc::new(TimedOutProvider),
-        )
-        .expect("fake provider bus"),
+        EventBus::from_spi(ProviderId::new_static("timed-out-test"), Arc::new(TimedOutProvider))
+            .expect("fake provider bus"),
     );
     let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::unbounded());
     builder
-        .register_managed_factory::<EventBus, _>(&[], move |_| {
-            Ok(managed_event_bus(Arc::clone(&bus)))
-        })
+        .register_managed_factory::<EventBus, _>(&[], move |_| Ok(managed_event_bus(Arc::clone(&bus))))
         .expect("bus adapter");
     let application = builder.build_all().expect("application");
     let mut shutdown = application.begin_shutdown(IocShutdownMode::Graceful);

@@ -30,8 +30,7 @@ fn format_shutdown_report(report: &ShutdownReport) -> String {
 fn check_shutdown_report(report: ShutdownReport) -> Result<(), CleanupError> {
     let diagnostic = format_shutdown_report(&report);
     let _ = writeln!(std::io::stderr().lock(), "{diagnostic}");
-    let accepted = matches!(report.outcome, ShutdownOutcome::Complete)
-        && report.known_abandoned_deliveries == 0;
+    let accepted = matches!(report.outcome, ShutdownOutcome::Complete) && report.known_abandoned_deliveries == 0;
     if accepted {
         Ok(())
     } else {
@@ -40,15 +39,12 @@ fn check_shutdown_report(report: ShutdownReport) -> Result<(), CleanupError> {
 }
 
 /// Adapts an existing bus. Abort and graceful requests return shutdown tickets
-/// without waiting for handlers. Their errors remain in the IoC shutdown report,
-/// and a cancelled wait resumes the same ticket observation.
+/// without waiting for handlers. Their errors remain in the IoC shutdown
+/// report, and a cancelled wait resumes the same ticket observation.
 pub fn managed_event_bus(bus: Arc<EventBus>) -> Managed<EventBus> {
     Managed::asynchronous_with_graceful_ticket(
         bus,
-        |bus| {
-            bus.request_shutdown(ShutdownMode::Immediate)
-                .map_err(CleanupError::new)
-        },
+        |bus| bus.request_shutdown(ShutdownMode::Immediate).map_err(CleanupError::new),
         |bus| {
             bus.request_shutdown(ShutdownMode::Graceful {
                 timeout: Duration::from_secs(30),
@@ -73,7 +69,7 @@ mod tests {
     use super::format_shutdown_report;
 
     #[test]
-    fn shutdown_report_policy_table() {
+    fn test_shutdown_report_policy_table() {
         for outcome in [ShutdownOutcome::Complete, ShutdownOutcome::TimedOut] {
             for abandoned in [0, 1] {
                 for uncertain in [false, true] {
@@ -87,12 +83,8 @@ mod tests {
                     assert_eq!(result.is_ok(), expected_ok, "{report:?}");
                     let formatted = format_shutdown_report(&report);
                     assert!(formatted.contains(&format!("outcome: {outcome:?}")));
-                    assert!(
-                        formatted.contains(&format!("known_abandoned_deliveries: {abandoned}"))
-                    );
-                    assert!(formatted.contains(&format!(
-                        "provider_may_have_abandoned_deliveries: {uncertain}"
-                    )));
+                    assert!(formatted.contains(&format!("known_abandoned_deliveries: {abandoned}")));
+                    assert!(formatted.contains(&format!("provider_may_have_abandoned_deliveries: {uncertain}")));
                     if !expected_ok {
                         let error = result.expect_err("degraded report must be diagnosed");
                         assert!(error.to_string().contains(&formatted));

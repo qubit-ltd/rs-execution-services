@@ -21,31 +21,26 @@ use tokio::runtime::Builder;
 fn main() -> Result<(), Box<dyn Error>> {
     let runtime = Builder::new_multi_thread().enable_all().build()?;
     let root = tempfile::tempdir()?;
-    let application =
-        match runtime.block_on(build_application(runtime.handle().clone(), root.path())) {
-            Ok(application) => application,
-            Err(ApplicationBuildError::Build(failure)) => {
-                eprintln!(
-                    "Application construction failed: {}",
-                    failure.as_ref().cause()
-                );
-                let report = failure.as_ref().cleanup_report();
-                if let Some(report) = report
-                    && !report.is_success()
-                {
-                    eprintln!("Application cleanup failed: {report:?}");
-                }
-                return Err(failure);
+    let application = match runtime.block_on(build_application(runtime.handle().clone(), root.path())) {
+        Ok(application) => application,
+        Err(ApplicationBuildError::Build(failure)) => {
+            eprintln!("Application construction failed: {}", failure.as_ref().cause());
+            let report = failure.as_ref().cleanup_report();
+            if let Some(report) = report
+                && !report.is_success()
+            {
+                eprintln!("Application cleanup failed: {report:?}");
             }
-            Err(ApplicationBuildError::Registration(error)) => return Err(error.into()),
-        };
+            return Err(failure);
+        }
+        Err(ApplicationBuildError::Registration(error)) => return Err(error.into()),
+    };
     let business = (|| -> Result<_, Box<dyn Error>> {
         write_report(root.path())?;
         let context = application.context();
         let worker = context.get::<FlushWorker>()?;
         let services = context.get::<ExecutionServices>()?;
-        let result =
-            runtime.block_on(services.spawn_io(async { Ok::<u8, std::io::Error>(43) })?)?;
+        let result = runtime.block_on(services.spawn_io(async { Ok::<u8, std::io::Error>(43) })?)?;
         assert_eq!(result, 43);
         Ok((worker, services))
     })();

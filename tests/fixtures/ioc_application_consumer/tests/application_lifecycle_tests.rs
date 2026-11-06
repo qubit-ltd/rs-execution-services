@@ -59,16 +59,12 @@ fn test_ioc_shutdown_terminates_running_execution_services() {
             .expect("build application");
         let context = application.context();
         let worker = context.get::<FlushWorker>().expect("resolve worker");
-        let services = context
-            .get::<ExecutionServices>()
-            .expect("resolve execution services");
+        let services = context.get::<ExecutionServices>().expect("resolve execution services");
         let (started_tx, started_rx) = oneshot::channel();
         let (ended_tx, ended_rx) = oneshot::channel();
         let task = services
             .spawn_io(async move {
-                let _guard = TaskGuard {
-                    ended: Some(ended_tx),
-                };
+                let _guard = TaskGuard { ended: Some(ended_tx) };
                 let _ = started_tx.send(());
                 std::future::pending::<()>().await;
                 Ok::<(), io::Error>(())
@@ -90,11 +86,7 @@ fn test_ioc_shutdown_terminates_running_execution_services() {
             .expect("IO task should be released before timeout")
             .expect("IO task guard should notify release");
         assert!(services.is_terminated());
-        assert!(
-            services
-                .spawn_io(async { Ok::<(), io::Error>(()) })
-                .is_err()
-        );
+        assert!(services.spawn_io(async { Ok::<(), io::Error>(()) }).is_err());
         assert_eq!(worker.graceful_requests(), 0);
         assert_eq!(worker.final_task_result(), None);
         assert!(worker.messages().is_empty());
@@ -160,19 +152,11 @@ fn test_event_bus_missing_registry_prevents_factory_execution() {
 
     let mut failure = builder.build().err().expect("missing registry");
     let report = runtime.block_on(failure.wait_cleanup());
-    assert!(matches!(
-        failure.cause(),
-        BuildError::MissingDependency { .. }
-    ));
+    assert!(matches!(failure.cause(), BuildError::MissingDependency { .. }));
     assert!(report.is_none());
     assert_eq!(factory_calls.load(Ordering::SeqCst), 0);
     assert_eq!(creates.load(Ordering::SeqCst), 0);
-    assert!(
-        observed_services
-            .lock()
-            .expect("lock observed services")
-            .is_none()
-    );
+    assert!(observed_services.lock().expect("lock observed services").is_none());
 }
 
 /// Verifies the real resource lifecycle through the public application
@@ -204,8 +188,7 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
                         .build()
                         .map_err(FactoryError::new)?,
                 );
-                *observed_slot.lock().expect("lock observed services") =
-                    Some(Arc::clone(&services));
+                *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
                 Ok(Managed::asynchronous(
                     services,
                     move |services| {
@@ -225,35 +208,31 @@ fn test_async_build_failure_stops_managed_execution_services_once() {
             .expect("register managed execution services");
         let expected_slot = Arc::clone(&observed_services);
         builder
-            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(
-                move |(services,)| {
-                    Box::pin(async move {
-                        assert!(Arc::ptr_eq(
-                            &services,
-                            expected_slot
-                                .lock()
-                                .expect("lock observed services")
-                                .as_ref()
-                                .expect("resource was handed off"),
-                        ));
-                        let (task_started_tx, task_started_rx) = oneshot::channel();
-                        let _task = services
-                            .spawn_io(async move {
-                                let _ = task_started_tx.send(());
-                                std::future::pending::<()>().await;
-                                Ok::<(), io::Error>(())
-                            })
-                            .map_err(FactoryError::new)?;
-                        timeout(Duration::from_secs(5), task_started_rx)
-                            .await
-                            .expect("IO task should start before timeout")
-                            .expect("IO task should notify startup");
-                        Err(FactoryError::new(io::Error::other(
-                            "expected downstream failure",
-                        )))
-                    })
-                },
-            )
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
+                Box::pin(async move {
+                    assert!(Arc::ptr_eq(
+                        &services,
+                        expected_slot
+                            .lock()
+                            .expect("lock observed services")
+                            .as_ref()
+                            .expect("resource was handed off"),
+                    ));
+                    let (task_started_tx, task_started_rx) = oneshot::channel();
+                    let _task = services
+                        .spawn_io(async move {
+                            let _ = task_started_tx.send(());
+                            std::future::pending::<()>().await;
+                            Ok::<(), io::Error>(())
+                        })
+                        .map_err(FactoryError::new)?;
+                    timeout(Duration::from_secs(5), task_started_rx)
+                        .await
+                        .expect("IO task should start before timeout")
+                        .expect("IO task should notify startup");
+                    Err(FactoryError::new(io::Error::other("expected downstream failure")))
+                })
+            })
             .expect("register dependent failing factory");
         builder.root::<u8>();
 
@@ -322,8 +301,7 @@ fn test_cancelling_async_build_stops_managed_execution_services_once() {
                         .build()
                         .map_err(FactoryError::new)?,
                 );
-                *observed_slot.lock().expect("lock observed services") =
-                    Some(Arc::clone(&services));
+                *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
                 Ok(Managed::asynchronous(
                     services,
                     move |services| {
@@ -342,18 +320,14 @@ fn test_cancelling_async_build_stops_managed_execution_services_once() {
             })
             .expect("register managed execution services");
         builder
-            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(
-                move |(services,)| {
-                    Box::pin(async move {
-                        let _services = services;
-                        factory_started_tx
-                            .send(())
-                            .expect("test receiver should be alive");
-                        std::future::pending::<()>().await;
-                        Ok(Arc::new(1))
-                    })
-                },
-            )
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
+                Box::pin(async move {
+                    let _services = services;
+                    factory_started_tx.send(()).expect("test receiver should be alive");
+                    std::future::pending::<()>().await;
+                    Ok(Arc::new(1))
+                })
+            })
             .expect("register pending async factory");
         builder.root::<u8>();
 
@@ -420,8 +394,7 @@ fn test_cancelled_build_session_waits_for_managed_execution_services_termination
                         .build()
                         .map_err(FactoryError::new)?,
                 );
-                *observed_slot.lock().expect("lock observed services") =
-                    Some(Arc::clone(&services));
+                *observed_slot.lock().expect("lock observed services") = Some(Arc::clone(&services));
                 Ok(Managed::asynchronous(
                     services,
                     move |services| {
@@ -440,18 +413,14 @@ fn test_cancelled_build_session_waits_for_managed_execution_services_termination
             })
             .expect("register managed execution services");
         builder
-            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(
-                move |(services,)| {
-                    Box::pin(async move {
-                        let _services = services;
-                        factory_started_tx
-                            .send(())
-                            .expect("test receiver should be alive");
-                        std::future::pending::<()>().await;
-                        Ok(Arc::new(1))
-                    })
-                },
-            )
+            .register_injected_async_factory::<u8, (Arc<ExecutionServices>,), _>(move |(services,)| {
+                Box::pin(async move {
+                    let _services = services;
+                    factory_started_tx.send(()).expect("test receiver should be alive");
+                    std::future::pending::<()>().await;
+                    Ok(Arc::new(1))
+                })
+            })
             .expect("register pending async factory");
         builder.root::<u8>();
 
@@ -545,9 +514,7 @@ fn test_build_failure_stops_an_already_created_managed_resource() {
         .expect("register managed resource");
     builder
         .register_factory::<u16, _>(&[Dependency::of::<ExecutionServices>()], |context| {
-            let _services = context
-                .get::<ExecutionServices>()
-                .map_err(FactoryError::new)?;
+            let _services = context.get::<ExecutionServices>().map_err(FactoryError::new)?;
             Err(FactoryError::new(io::Error::other("expected failure")))
         })
         .expect("register failing factory");

@@ -240,9 +240,7 @@ impl ExecutionServices {
         let mut changes = service.capacity_changes();
         loop {
             match self.admission.admit(|| {
-                let future_attempt = future
-                    .take()
-                    .expect("IO wait future remains available until accepted");
+                let future_attempt = future.take().expect("IO wait future remains available until accepted");
                 match service.try_spawn(future_attempt) {
                     Ok(handle) => Ok(handle),
                     Err(rejected) => {
