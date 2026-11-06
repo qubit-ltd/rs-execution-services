@@ -43,6 +43,20 @@ impl Drop for DropCounter {
     }
 }
 
+struct PollCounterFuture {
+    polls: Arc<AtomicUsize>,
+    _drop_counter: DropCounter,
+}
+
+impl Future for PollCounterFuture {
+    type Output = Result<usize, io::Error>;
+
+    fn poll(self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
+        self.polls.fetch_add(1, Ordering::SeqCst);
+        Poll::Ready(Ok(42))
+    }
+}
+
 struct GateRelease(Option<mpsc::Sender<()>>);
 
 impl GateRelease {
@@ -335,9 +349,17 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
         })
         .unwrap();
     yield_now().await;
-    let waiting = services.spawn_io_wait(async { Ok::<usize, io::Error>(42) });
+    let polls = Arc::new(AtomicUsize::new(0));
+    let drops = Arc::new(AtomicUsize::new(0));
+    let future = PollCounterFuture {
+        polls: Arc::clone(&polls),
+        _drop_counter: DropCounter(Arc::clone(&drops)),
+    };
+    let waiting = services.spawn_io_wait(future);
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
+    assert_eq!(polls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -346,8 +368,10 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
             .unwrap()
             .await
             .unwrap(),
-        42
+        42,
     );
+    assert_eq!(polls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     running.await.unwrap();
     services.shutdown();
     services.await_termination().await;

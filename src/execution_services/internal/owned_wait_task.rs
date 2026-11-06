@@ -7,7 +7,6 @@
 // =============================================================================
 //! Owns a one-shot task while capacity-wait submission attempts are retried.
 
-use std::future::Future;
 use std::sync::Arc;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
@@ -57,26 +56,6 @@ impl<T> OwnedWaitTask<T> {
     {
         let task = Arc::clone(&self.task);
         move || take_task(&task)()
-    }
-
-    /// Creates an IO wrapper that takes the future on its first poll.
-    ///
-    /// Rejected wrappers leave the future in the shared slot for the next
-    /// attempt. The mutex is released before polling user code.
-    ///
-    /// # Type Parameters
-    ///
-    /// * `R` - Successful output type produced by the future.
-    /// * `E` - Error type produced by the future.
-    #[inline]
-    pub(in crate::execution_services) fn future_attempt<R, E>(
-        &self,
-    ) -> impl Future<Output = Result<R, E>> + Send + 'static
-    where
-        T: Future<Output = Result<R, E>> + Send + 'static,
-    {
-        let task = Arc::clone(&self.task);
-        async move { take_task(&task).await }
     }
 }
 
