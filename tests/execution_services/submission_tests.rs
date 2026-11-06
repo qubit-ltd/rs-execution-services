@@ -103,7 +103,7 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
         })
     ));
     assert_eq!(queued.cancel(), CancelResult::Cancelled);
-    queued.get().expect_err("queued task should be cancelled");
+    let _ = queued.get().expect_err("queued task should be cancelled");
     let replacement = services
         .submit_cpu_callable(|| Ok::<(), io::Error>(()))
         .expect("cancelled CPU capacity should be reusable");
