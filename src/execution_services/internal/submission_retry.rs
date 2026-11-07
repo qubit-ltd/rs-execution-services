@@ -8,8 +8,8 @@
 //! Retries native task submission after advisory capacity notifications.
 
 use qubit_executor::service::SubmissionError;
-use tokio::sync::watch::Receiver;
 
+use super::capacity_change_receiver::CapacityChangeReceiver;
 use super::execution_services_admission::ExecutionServicesAdmission;
 use crate::ExecutionServicesSubmissionError;
 
@@ -38,9 +38,9 @@ use crate::ExecutionServicesSubmissionError;
 /// Returns facade Shutdown if admission closes or the change channel closes;
 /// propagates saturation only internally while retrying and returns all other
 /// native submission errors immediately.
-pub async fn retry_submission<H, F>(
+pub(crate) async fn retry_submission<H, F>(
     admission: &ExecutionServicesAdmission,
-    mut changes: Receiver<u64>,
+    mut changes: impl CapacityChangeReceiver,
     mut attempt: F,
 ) -> Result<H, ExecutionServicesSubmissionError>
 where
