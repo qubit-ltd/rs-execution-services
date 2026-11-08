@@ -109,13 +109,38 @@ impl ExecutionServices {
         R: Send + 'static,
         E: Send + 'static,
     {
-        let service = self.admission.resolve_domain(ExecutionDomain::Cpu, self.cpu.as_ref())?;
-        let task = OwnedWaitTask::new(task);
-        let changes = service.capacity_changes();
-        retry_submission(&self.admission, changes, || {
-            service.submit_callable(task.callable_attempt())
-        })
-        .await
+        let service = self
+            .admission
+            .resolve_domain(ExecutionDomain::Cpu, self.cpu.as_ref())?;
+        let mut callable = Some({
+            let mut task = Some(task);
+            move || task.take().expect("CPU wait task executes once")()
+        });
+        let mut changes = service.capacity_changes();
+        loop {
+            match self.admission.admit(|| {
+                let callable_attempt = callable
+                    .take()
+                    .expect("CPU wait task remains available until accepted");
+                match service.try_submit_callable(callable_attempt) {
+                    Ok(handle) => Ok(handle),
+                    Err(rejected) => {
+                        let (reason, callable_attempt) = rejected.into_parts();
+                        callable = Some(callable_attempt);
+                        Err(reason)
+                    }
+                }
+            }) {
+                Ok(handle) => return Ok(handle),
+                Err(SubmissionError::Saturated) => {
+                    changes
+                        .changed()
+                        .await
+                        .map_err(|_| SubmissionError::Shutdown)?;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
     }
 
     /// Submits a Tokio blocking callable, waiting and retrying when capacity is

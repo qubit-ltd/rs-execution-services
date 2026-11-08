@@ -283,9 +283,15 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
         })
         .unwrap();
     started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
-    let waiting = services.submit_cpu_callable_wait(|| Ok::<usize, io::Error>(42));
+    let calls = Arc::new(AtomicUsize::new(0));
+    let task_calls = Arc::clone(&calls);
+    let waiting = services.submit_cpu_callable_wait(move || {
+        task_calls.fetch_add(1, Ordering::SeqCst);
+        Ok::<usize, io::Error>(42)
+    });
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
     release_tx.send(()).unwrap();
     assert_eq!(
         timeout(Duration::from_secs(1), waiting)
@@ -296,6 +302,7 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
             .unwrap(),
         42
     );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     running.get().unwrap();
     services.shutdown();
     services.await_termination().await;
@@ -375,6 +382,39 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
     running.await.unwrap();
     services.shutdown();
     services.await_termination().await;
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_dropping_accepted_cpu_wait_handle_does_not_cancel_task() {
+    let services = ExecutionServices::builder()
+        .enable_cpu()
+        .cpu_threads(1)
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let handle = services
+        .submit_cpu_callable_wait(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            finished_tx.send(()).unwrap();
+            Ok::<(), io::Error>(())
+        })
+        .await
+        .unwrap();
+    drop(handle);
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("accepted task should start");
+    release_tx.send(()).unwrap();
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("dropping result handle must not cancel task");
+    services.shutdown();
+    timeout(Duration::from_secs(1), services.await_termination())
+        .await
+        .expect("CPU service should terminate");
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
