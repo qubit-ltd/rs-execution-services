@@ -739,6 +739,57 @@ async fn test_cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
 }
 
 #[tokio_test]
+async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once() {
+    let services = ExecutionServices::builder()
+        .enable_cpu()
+        .cpu_threads(1)
+        .cpu_task_capacity(1)
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let running = services
+        .submit_cpu_callable(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            finished_tx.send(()).unwrap();
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    started_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("CPU worker should start the capacity blocker");
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let call_count = Arc::clone(&calls);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drops));
+    let mut waiting = Box::pin(services.submit_cpu_callable_wait(move || {
+        let _drop_counter = drop_counter;
+        call_count.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), io::Error>(())
+    }));
+
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(waiting);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    release_tx.send(()).unwrap();
+    finished_rx
+        .recv_timeout(Duration::from_secs(1))
+        .expect("capacity blocker should finish after release");
+    running.get().unwrap();
+    services.shutdown();
+    timeout(Duration::from_secs(1), services.await_termination())
+        .await
+        .expect("CPU service should terminate");
+}
+
+#[tokio_test]
 async fn test_stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_task_once() {
     let services = ExecutionServices::builder()
         .enable_io()
