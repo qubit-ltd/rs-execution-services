@@ -58,7 +58,7 @@ qubit-execution-services = "0.10.1"
 tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 ```
 
-This repository resolves `qubit-thread-pool`, `qubit-rayon-executor`, and `qubit-tokio-executor` from crates.io using the version requirements in `Cargo.toml`. Publishing requires the matching dependency versions to be available in the registry.
+In this working tree, `qubit-executor`, `qubit-rayon-executor`, and `qubit-tokio-executor` use versioned sibling path dependencies; `.cargo/config.toml` also patches these crates to the local checkouts. Keep those repositories beside this one as described in the [README's Development Setup section](../README.md#development-setup). `qubit-thread-pool` uses its registry version requirement. Applications depending on the published crate resolve its dependencies from the registry, unless the application supplies its own overrides. Publishing requires the matching dependency versions to be available in the registry.
 
 Enable only the domains the application uses. This example selects blocking, CPU, and IO; Tokio blocking remains disabled:
 
