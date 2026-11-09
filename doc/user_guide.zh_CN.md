@@ -381,6 +381,10 @@ assert!(services.is_terminated());
 
 等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了跨域子任务完成后再关闭的顺序。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
 
+丢弃 `ExecutionServices` 与调用 `shutdown()` 或 `stop()` 不同：丢弃只释放门面持有的各域服务值，不会统一请求 stop，也不会等待所有已接收任务结束。`blocking` 服务值析构时会向线程池请求 graceful shutdown。CPU wrapper 的析构不会调用它的显式 `shutdown()` 或 `stop()`；Rayon pool 值的析构会发出终止信号，现有工作完成后 worker 才会逐步退出，但这不是 facade 对服务终止的等待。丢弃 Tokio blocking 或 IO 服务 wrapper 不会请求取消已接收任务；这些任务仍由 Tokio 的任务和 runtime 生命周期管理。不要依赖门面析构中止 Tokio 任务，也不要把析构当作任务清理已经完成的证明。
+
+如果必须等任务及其清理完成后才能释放共享资源，应先停止并等待生产者，再调用 `shutdown()`，在传入的 Tokio runtime 仍运行时等待 `await_termination()`，最后丢弃门面并释放资源。成功返回和普通错误返回都应执行这套顺序；保留原操作结果，同时完成关闭。如果调用方 future 被取消，它无法在之后恢复并等待异步清理。同步清理可以在任务取消/析构路径中执行；异步清理必须由仍存活的所有者驱动，完成后才能释放所需资源。单独丢弃 `await_termination()` future 只取消这次等待，不会关闭服务；仍存活的所有者可以再次等待。
+
 应用需要由一个所有者统一提交多个执行域的任务并协调关闭时，可以使用此 facade。组件只需要一个执行域或该域的专有控制能力时，可以直接依赖对应的 executor crate。
 
 ## 错误与诊断

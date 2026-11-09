@@ -61,6 +61,10 @@ wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第�
 
 在 Tokio 服务终止前，保持传入的 runtime 持续运行。调用 `shutdown()` 前先停止外部生产者，并等待可能提交子任务的已接收生产者退出。
 
+丢弃 facade 只释放其持有的服务值；它不会统一请求 `stop()`，也不会等待所有已接收任务完成。Cargo metadata 解析到的 `qubit-thread-pool 0.12.1` 源码显示，`ThreadPool` 值析构时会请求 graceful shutdown。`qubit-rayon-executor 0.9.0` wrapper 析构时不会调用显式 shutdown 或 stop；Rayon pool 值析构会发出终止信号，现有工作完成后 worker 才会逐步退出，但 facade 不会等待。解析到的 `qubit-tokio-executor 0.12.0` blocking 和 IO service wrapper 没有会取消已接收任务的析构实现；丢弃 facade 不会 abort Tokio blocking 任务或 IO future。这些逐域行为不能组成统一的完成保证；如果必须在释放资源前等已接收工作完成，应调用 `shutdown()` 并等待 `await_termination()`，再丢弃 facade。
+
+正常成功或返回错误时，应保留操作结果，同时请求 graceful shutdown 并等待终止。如果需要强制停止或 Tokio abort，同步清理可以在任务取消/析构路径中执行；异步清理必须由仍存活的所有者驱动，完成后才能释放所需资源。future 一旦取消，便不能恢复后再执行异步清理等待。单独丢弃 `await_termination()` future 只会取消本次等待；仍存活的所有者可以再次等待。Tokio runtime 应持续运行，直到其已接收工作及所需清理都完成。
+
 容量为 1 的 IO 任务若在同一个已满 IO 域中等待子任务，会形成等待环：父任务占据唯一接收名额，子任务则等待名额释放。应将编排放到该域外；独立工作可使用不同域；若确需同域等待，应明确分析依赖深度和容量。单纯增加容量不能证明任意递归等待都安全。门面不检测依赖环，也不创建备用 worker。
 
 ## 下游集成

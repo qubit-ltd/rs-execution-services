@@ -186,6 +186,118 @@ async fn test_waits_for_blocking_capacity_without_recreating_the_task() {
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_cancelling_full_blocking_wait_drops_task_and_keeps_service_running() {
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .blocking_pool_size(1)
+        .blocking_queue_capacity(1)
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
+    let running = services
+        .submit_blocking_callable(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(TEST_TIMEOUT).expect("worker gate must open");
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).expect("worker must start");
+    let queued = services.submit_blocking_callable(|| Ok::<(), io::Error>(())).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let task_calls = Arc::clone(&calls);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drops));
+    let mut waiting = Box::pin(services.submit_blocking_callable_wait(move || {
+        let _drop_counter = drop_counter;
+        task_calls.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), io::Error>(())
+    }));
+
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(waiting);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(services.is_running());
+
+    gate.release();
+    timeout(TEST_TIMEOUT, running).await.unwrap().unwrap();
+    timeout(TEST_TIMEOUT, queued).await.unwrap().unwrap();
+    let next = timeout(
+        TEST_TIMEOUT,
+        services.submit_blocking_callable_wait(|| Ok::<u8, io::Error>(42)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(timeout(TEST_TIMEOUT, next).await.unwrap().unwrap(), 42);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    services.shutdown();
+    timeout(TEST_TIMEOUT, services.await_termination()).await.unwrap();
+    assert!(services.is_terminated());
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_cancelling_full_tokio_blocking_wait_drops_task_and_keeps_service_running() {
+    let services = ExecutionServices::builder()
+        .enable_tokio_blocking()
+        .runtime(Handle::current())
+        .tokio_blocking_task_capacity(NonZeroUsize::new(1).unwrap())
+        .build()
+        .unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
+    let running = services
+        .submit_tokio_blocking_callable(move || {
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(TEST_TIMEOUT).expect("worker gate must open");
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).expect("worker must start");
+    let calls = Arc::new(AtomicUsize::new(0));
+    let task_calls = Arc::clone(&calls);
+    let drops = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&drops));
+    let mut waiting = Box::pin(services.submit_tokio_blocking_callable_wait(move || {
+        let _drop_counter = drop_counter;
+        task_calls.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), io::Error>(())
+    }));
+
+    assert!(poll_once(waiting.as_mut()).await.is_pending());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    drop(waiting);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+    assert!(services.is_running());
+
+    gate.release();
+    timeout(TEST_TIMEOUT, running).await.unwrap().unwrap();
+    let next = timeout(
+        TEST_TIMEOUT,
+        services.submit_tokio_blocking_callable_wait(|| Ok::<u8, io::Error>(42)),
+    )
+    .await
+    .unwrap()
+    .unwrap();
+    assert_eq!(timeout(TEST_TIMEOUT, next).await.unwrap().unwrap(), 42);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
+
+    services.shutdown();
+    timeout(TEST_TIMEOUT, services.await_termination()).await.unwrap();
+    assert!(services.is_terminated());
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_blocking_full_capacity_wait_wakes_on_shutdown() {
     let services = ExecutionServices::builder()
         .enable_blocking()

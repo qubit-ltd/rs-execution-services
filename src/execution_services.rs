@@ -53,6 +53,23 @@ use super::ExecutionServicesSnapshot;
 /// Stop and await producers that can submit child work before calling
 /// [`Self::shutdown`].
 ///
+/// # Dropping and explicit shutdown
+///
+/// Dropping this facade releases its domain service values. It does not
+/// perform a coordinated stop or wait for every accepted task to finish.
+/// Dropping the blocking domain's service value requests its graceful
+/// shutdown; dropping the CPU domain's wrapper does not call its explicit
+/// shutdown or stop operation. Dropping either Tokio domain's wrapper does
+/// not request cancellation of accepted Tokio work. Do not rely on facade
+/// drop to abort accepted Tokio tasks. When task completion and cleanup must
+/// finish before resources are released, stop and await producers, call
+/// [`Self::shutdown`], await [`Self::await_termination`], and only then drop
+/// the facade and release those resources. Keep the supplied Tokio runtime
+/// active throughout termination. If work is stopped or aborted, cleanup
+/// that can run synchronously may run in the task's cancellation/drop path.
+/// Asynchronous cleanup must be driven by a surviving owner; a cancelled
+/// future cannot resume to perform a later asynchronous cleanup wait.
+///
 /// # Examples
 ///
 /// ```
