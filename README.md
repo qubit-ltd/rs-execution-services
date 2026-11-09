@@ -105,7 +105,7 @@ For application shutdown, stop entry points and wait for accepted producers that
 
 ## Development Setup
 
-This repository resolves `qubit-thread-pool`, `qubit-rayon-executor`, and `qubit-tokio-executor` from crates.io using the version requirements in `Cargo.toml`. Publishing this crate requires the declared dependency versions to be available in the registry. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
+The working tree uses the latest local `rs-tokio-executor`, `rs-rayon-executor`, and `rs-executor` checkouts through versioned path dependencies in `Cargo.toml`; keep these repositories beside this one to build the workspace. `.cargo/config.toml` patches transitive and packaged-crate verification dependencies to those same checkouts. The standalone application and documentation consumers also need these executor siblings. The IoC integration fixture additionally uses local path dependencies: check out `rs-ioc`, `rs-event-bus`, `rs-config`, `rs-fs-registry`, `rs-fs-local`, and `rs-fs` beside this repository, together with the transitive path dependencies referenced by those manifests (`rs-value`, `rs-local-files`, `rs-redact`, and `rs-fs-testkit`). The pinned integration workflow records a fixed dependency set; the current integration workflow follows `rs-ioc/main`, supplies the repository-pinned lockfile for its current consumer, and keeps its other sibling repositories pinned. These fixture checks validate local integration layouts, not registry publication. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
 
 ## Testing
 

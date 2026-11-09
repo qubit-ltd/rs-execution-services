@@ -39,9 +39,69 @@ jobs:
           path: rs-execution-services
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          repository: qubit-ltd/rs-executor
+          ref: 96c6006e5f6e5d59959695893d7f4e8697d21a54
+          path: rs-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-rayon-executor
+          ref: 2caaa944acf2fb4dab977200b517ba1f59a759ce
+          path: rs-rayon-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-tokio-executor
+          ref: ca18599285e372da3f0074aba69e687ecc3af4a0
+          path: rs-tokio-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
           repository: qubit-ltd/rs-ioc
-          ref: eba48898cbb1d162924fdc5eb85c17c5d02eccc0
+          ref: c4e2557fb8db37635b56f8cf94c482cac4aa8ba6
           path: rs-ioc
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-event-bus
+          ref: 3806b857e177c06b3e7830440c63d06033e0acf8
+          path: rs-event-bus
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-config
+          ref: d6f72b0e0a7f10e8dbc1654d25a1050fbe295c29
+          path: rs-config
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-registry
+          ref: 6017e52712b70a4ab204e8b3b3f9963859f46075
+          path: rs-fs-registry
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-local
+          ref: a844d99548a9a3d751d2b005c8fd7368771cedf4
+          path: rs-fs-local
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs
+          ref: 6fc76f0b3dd0d7795d000c11cac749a3791402c2
+          path: rs-fs
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-redact
+          ref: 133954d6d24ed831f5133f2bd3d42a554f5e52ad
+          path: rs-redact
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-local-files
+          ref: d4235f2dcfa34cf09ea1bf49ba4fe70bb4307c89
+          path: rs-local-files
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-testkit
+          ref: b9425fec4cd142826f95cede3715db57b82d8b08
+          path: rs-fs-testkit
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-value
+          ref: 6f5ae6e2acd592dcb07d30b232b84735e1cc592d
+          path: rs-value
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.94.0
@@ -50,7 +110,7 @@ jobs:
         run: rustup component add clippy --toolchain 1.94.0
       - name: Record exact IoC consumer sources
         run: |
-          for repository in rs-execution-services rs-ioc; do
+          for repository in rs-execution-services rs-executor rs-rayon-executor rs-tokio-executor rs-ioc rs-event-bus rs-config rs-fs-registry rs-fs-local rs-fs rs-redact rs-local-files rs-fs-testkit rs-value; do
             git -C "../$repository" rev-parse HEAD
           done
           rustc +1.94.0 --version --verbose

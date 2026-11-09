@@ -181,9 +181,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-executor"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bdd570aac02516990873f6d72975c03ba3e99e2dfcf33dc53d7017d2f6d5891f"
+version = "0.9.1"
 dependencies = [
  "log",
  "oneshot",
@@ -222,8 +220,6 @@ dependencies = [
 [[package]]
 name = "qubit-rayon-executor"
 version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e1f096d9bcdc97bc9064f2f67c04570a44bd8a3ac205d12e4e0cb73e1cd0cd74"
 dependencies = [
  "parking_lot",
  "qubit-executor",
@@ -260,9 +256,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-tokio-executor"
-version = "0.11.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e688c70f8b660e1e933ed2b82bd5f1095c20746559f75054b6a0924f39c5926a"
+version = "0.12.0"
 dependencies = [
  "parking_lot",
  "qubit-atomic",
@@ -361,9 +355,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "1.53.1"
+version = "1.54.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
+checksum = "b52fd3255258d26fac7264ab5a76b53c13367136dc011d3d6ad4f8ed070396a3"
 dependencies = [
  "pin-project-lite",
  "tokio-macros",

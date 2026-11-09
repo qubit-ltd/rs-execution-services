@@ -31,6 +31,10 @@ use tokio::task::yield_now;
 use tokio::test as tokio_test;
 use tokio::time::timeout;
 
+use super::GateRelease;
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
 async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
     std::future::poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
 }
@@ -57,22 +61,6 @@ impl Future for PollCounterFuture {
     }
 }
 
-struct GateRelease(Option<mpsc::Sender<()>>);
-
-impl GateRelease {
-    fn release(&mut self) {
-        if let Some(sender) = self.0.take() {
-            let _ = sender.send(());
-        }
-    }
-}
-
-impl Drop for GateRelease {
-    fn drop(&mut self) {
-        self.release();
-    }
-}
-
 #[tokio_test]
 async fn test_wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
     let runtime = Handle::current();
@@ -92,31 +80,57 @@ async fn test_wait_apis_accept_non_clone_one_shot_tasks_for_every_domain() {
         .submit_blocking_callable_wait(move || Ok::<usize, io::Error>(blocking_value.len()))
         .await
         .unwrap();
-    assert_eq!(blocking.await.unwrap(), 8);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, async { blocking.await })
+            .await
+            .expect("blocking task should finish before the diagnostic timeout")
+            .unwrap(),
+        8
+    );
 
     let cpu_value = String::from("cpu");
     let cpu = services
         .submit_cpu_callable_wait(move || Ok::<usize, io::Error>(cpu_value.len()))
         .await
         .unwrap();
-    assert_eq!(cpu.await.unwrap(), 3);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, async { cpu.await })
+            .await
+            .expect("CPU task should finish before the diagnostic timeout")
+            .unwrap(),
+        3
+    );
 
     let tokio_blocking_value = String::from("tokio-blocking");
     let tokio_blocking = services
         .submit_tokio_blocking_callable_wait(move || Ok::<usize, io::Error>(tokio_blocking_value.len()))
         .await
         .unwrap();
-    assert_eq!(tokio_blocking.await.unwrap(), 14);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, async { tokio_blocking.await })
+            .await
+            .expect("Tokio blocking task should finish before the diagnostic timeout")
+            .unwrap(),
+        14
+    );
 
     let io_value = String::from("io");
     let io = services
         .spawn_io_wait(async move { Ok::<usize, io::Error>(io_value.len()) })
         .await
         .unwrap();
-    assert_eq!(io.await.unwrap(), 2);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, io)
+            .await
+            .expect("IO task should finish before the diagnostic timeout")
+            .unwrap(),
+        2
+    );
 
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
@@ -129,14 +143,17 @@ async fn test_waits_for_blocking_capacity_without_recreating_the_task() {
         .unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let running = services
         .submit_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     services.submit_blocking_callable(|| Ok::<(), io::Error>(())).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
@@ -148,20 +165,24 @@ async fn test_waits_for_blocking_capacity_without_recreating_the_task() {
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    release_tx.send(()).unwrap();
+    gate.release();
+    let handle = timeout(TEST_TIMEOUT, waiting).await.unwrap().unwrap();
     assert_eq!(
-        timeout(Duration::from_secs(1), waiting)
+        timeout(TEST_TIMEOUT, async { handle.await })
             .await
-            .unwrap()
-            .unwrap()
-            .get()
+            .expect("accepted blocking task should finish before the diagnostic timeout")
             .unwrap(),
         22
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    running.get().unwrap();
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
@@ -178,11 +199,13 @@ async fn test_blocking_full_capacity_wait_wakes_on_shutdown() {
     let running = services
         .submit_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let queued = services.submit_blocking_callable(|| Ok::<(), io::Error>(())).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -199,7 +222,7 @@ async fn test_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     services.shutdown();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -207,9 +230,15 @@ async fn test_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    queued.get().unwrap();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, async { queued.await })
+        .await
+        .expect("queued task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("blocking service must terminate");
 }
@@ -228,11 +257,13 @@ async fn test_blocking_full_capacity_wait_wakes_on_stop() {
     let running = services
         .submit_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let queued = services.submit_blocking_callable(|| Ok::<(), io::Error>(())).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
@@ -249,7 +280,7 @@ async fn test_blocking_full_capacity_wait_wakes_on_stop() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     let _stop_report = services.stop();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -257,9 +288,14 @@ async fn test_blocking_full_capacity_wait_wakes_on_stop() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    let _queued_result = queued.get();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    let _queued_result = timeout(TEST_TIMEOUT, async { queued.await })
+        .await
+        .expect("queued task should finish before the diagnostic timeout");
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("blocking service must terminate");
 }
@@ -275,14 +311,17 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
         .unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let running = services
         .submit_cpu_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
     let waiting = services.submit_cpu_callable_wait(move || {
@@ -292,20 +331,24 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
-    release_tx.send(()).unwrap();
+    gate.release();
+    let handle = timeout(TEST_TIMEOUT, waiting).await.unwrap().unwrap();
     assert_eq!(
-        timeout(Duration::from_secs(1), waiting)
+        timeout(TEST_TIMEOUT, async { handle.await })
             .await
-            .unwrap()
-            .unwrap()
-            .get()
+            .expect("accepted CPU task should finish before the diagnostic timeout")
             .unwrap(),
         42
     );
     assert_eq!(calls.load(Ordering::SeqCst), 1);
-    running.get().unwrap();
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 
     // Tokio blocking domain.
     let services = ExecutionServices::builder()
@@ -316,30 +359,37 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
         .unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let running = services
         .submit_tokio_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let waiting = services.submit_tokio_blocking_callable_wait(|| Ok::<usize, io::Error>(42));
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
-    release_tx.send(()).unwrap();
+    gate.release();
+    let handle = timeout(TEST_TIMEOUT, waiting).await.unwrap().unwrap();
     assert_eq!(
-        timeout(Duration::from_secs(1), waiting)
+        timeout(TEST_TIMEOUT, async { handle.await })
             .await
-            .unwrap()
-            .unwrap()
-            .get()
+            .expect("accepted Tokio blocking task should finish before the diagnostic timeout")
             .unwrap(),
         42
     );
-    running.get().unwrap();
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 
     // IO domain.
     let services = ExecutionServices::builder()
@@ -369,19 +419,19 @@ async fn test_waits_for_cpu_tokio_blocking_and_io_capacity() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     release_tx.send(()).unwrap();
     assert_eq!(
-        timeout(Duration::from_secs(1), waiting)
-            .await
-            .unwrap()
-            .unwrap()
-            .await
-            .unwrap(),
+        timeout(TEST_TIMEOUT, waiting).await.unwrap().unwrap().await.unwrap(),
         42,
     );
     assert_eq!(polls.load(Ordering::SeqCst), 1);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
-    running.await.unwrap();
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("accepted CPU task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
@@ -393,11 +443,14 @@ async fn test_dropping_accepted_cpu_wait_handle_does_not_cancel_task() {
         .unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let (finished_tx, finished_rx) = mpsc::channel();
     let handle = services
         .submit_cpu_callable_wait(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             finished_tx.send(()).unwrap();
             Ok::<(), io::Error>(())
         })
@@ -405,14 +458,14 @@ async fn test_dropping_accepted_cpu_wait_handle_does_not_cancel_task() {
         .unwrap();
     drop(handle);
     started_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(TEST_TIMEOUT)
         .expect("accepted task should start");
-    release_tx.send(()).unwrap();
+    gate.release();
     finished_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(TEST_TIMEOUT)
         .expect("dropping result handle must not cancel task");
     services.shutdown();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("CPU service should terminate");
 }
@@ -431,11 +484,13 @@ async fn test_cpu_full_capacity_wait_wakes_on_shutdown() {
     let running = services
         .submit_cpu_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
@@ -451,7 +506,7 @@ async fn test_cpu_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     services.shutdown();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -459,8 +514,11 @@ async fn test_cpu_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("CPU service must terminate");
 }
@@ -479,11 +537,13 @@ async fn test_cpu_full_capacity_wait_wakes_on_stop() {
     let running = services
         .submit_cpu_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
@@ -499,7 +559,7 @@ async fn test_cpu_full_capacity_wait_wakes_on_stop() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     let _stop_report = services.stop();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -507,8 +567,11 @@ async fn test_cpu_full_capacity_wait_wakes_on_stop() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("CPU service must terminate");
 }
@@ -527,11 +590,13 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_shutdown() {
     let running = services
         .submit_tokio_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
@@ -547,7 +612,7 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     services.shutdown();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -555,8 +620,11 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("Tokio blocking service must terminate");
 }
@@ -575,11 +643,13 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_stop() {
     let running = services
         .submit_tokio_blocking_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv().unwrap();
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("worker release gate should open");
             Ok::<(), io::Error>(())
         })
         .unwrap();
-    started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    started_rx.recv_timeout(TEST_TIMEOUT).unwrap();
     let calls = Arc::new(AtomicUsize::new(0));
     let drops = Arc::new(AtomicUsize::new(0));
     let task_calls = Arc::clone(&calls);
@@ -595,7 +665,7 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_stop() {
     assert_eq!(drops.load(Ordering::SeqCst), 0);
     let _stop_report = services.stop();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.expect("wait must wake"),
+        timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
@@ -603,8 +673,11 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_stop() {
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
     gate.release();
-    running.get().unwrap();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("Tokio blocking service must terminate");
 }
@@ -638,7 +711,9 @@ async fn test_wait_prioritizes_shutdown_over_disabled_domain() {
             })
         ));
     }
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -668,7 +743,9 @@ async fn test_disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     disabled.shutdown();
-    disabled.await_termination().await;
+    timeout(TEST_TIMEOUT, disabled.await_termination())
+        .await
+        .expect("disabled services should terminate before the diagnostic timeout");
 
     let services = ExecutionServices::builder()
         .enable_io()
@@ -694,7 +771,7 @@ async fn test_disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     pin!(waiting);
     assert!(poll_once(waiting.as_mut()).await.is_pending());
     services.shutdown();
-    let result = timeout(Duration::from_secs(1), waiting).await.unwrap();
+    let result = timeout(TEST_TIMEOUT, waiting).await.unwrap();
     assert!(matches!(
         result,
         Err(ExecutionServicesSubmissionError::Rejected {
@@ -703,7 +780,9 @@ async fn test_disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     ));
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
     let _report = services.stop();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -733,9 +812,14 @@ async fn test_cancelling_a_full_capacity_wait_drops_the_unaccepted_task_once() {
     drop(waiting);
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
     release_tx.send(()).unwrap();
-    running.await.unwrap();
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running CPU task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -748,6 +832,7 @@ async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once
         .unwrap();
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let (finished_tx, finished_rx) = mpsc::channel();
     let running = services
         .submit_cpu_callable(move || {
@@ -758,7 +843,7 @@ async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once
         })
         .unwrap();
     started_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(TEST_TIMEOUT)
         .expect("CPU worker should start the capacity blocker");
 
     let calls = Arc::new(AtomicUsize::new(0));
@@ -778,13 +863,16 @@ async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once
     assert_eq!(calls.load(Ordering::SeqCst), 0);
     assert_eq!(drops.load(Ordering::SeqCst), 1);
 
-    release_tx.send(()).unwrap();
+    gate.release();
     finished_rx
-        .recv_timeout(Duration::from_secs(1))
+        .recv_timeout(TEST_TIMEOUT)
         .expect("capacity blocker should finish after release");
-    running.get().unwrap();
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("CPU service should terminate");
 }
@@ -818,14 +906,19 @@ async fn test_stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_tas
 
     let _stop_report = services.stop();
     assert!(matches!(
-        timeout(Duration::from_secs(1), waiting).await.unwrap(),
+        timeout(TEST_TIMEOUT, waiting).await.unwrap(),
         Err(ExecutionServicesSubmissionError::Rejected {
             source: SubmissionError::Shutdown
         })
     ));
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
-    assert!(matches!(running.await, Err(TaskExecutionError::Cancelled)));
-    services.await_termination().await;
+    let cancelled = timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("stopped CPU task should finish before the diagnostic timeout");
+    assert!(matches!(cancelled, Err(TaskExecutionError::Cancelled)));
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -852,14 +945,33 @@ async fn test_two_waiters_compete_for_capacity_without_losing_wakeups() {
     assert!(poll_once(first.as_mut()).await.is_pending());
     assert!(poll_once(second.as_mut()).await.is_pending());
     release_tx.send(()).unwrap();
-    let (first, second) = timeout(Duration::from_secs(1), async { join!(&mut first, &mut second) })
+    let (first, second) = timeout(TEST_TIMEOUT, async { join!(&mut first, &mut second) })
         .await
         .expect("both waiters should eventually acquire capacity");
-    assert_eq!(first.unwrap().await.unwrap(), 1);
-    assert_eq!(second.unwrap().await.unwrap(), 2);
-    running.await.unwrap();
+    let first = first.unwrap();
+    assert_eq!(
+        timeout(TEST_TIMEOUT, first)
+            .await
+            .expect("first waiting task should finish before the diagnostic timeout")
+            .unwrap(),
+        1
+    );
+    let second = second.unwrap();
+    assert_eq!(
+        timeout(TEST_TIMEOUT, second)
+            .await
+            .expect("second waiting task should finish before the diagnostic timeout")
+            .unwrap(),
+        2
+    );
+    timeout(TEST_TIMEOUT, running)
+        .await
+        .expect("running IO task should finish before the diagnostic timeout")
+        .unwrap();
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test(flavor = "multi_thread", worker_threads = 2)]
@@ -888,7 +1000,7 @@ async fn test_io_parent_waiting_on_same_full_domain_remains_pending() {
         .expect("parent task should be accepted");
 
     assert!(
-        timeout(Duration::from_secs(1), pending_rx)
+        timeout(TEST_TIMEOUT, pending_rx)
             .await
             .expect("parent should report the child wait state")
             .expect("parent should report its state")
@@ -896,10 +1008,10 @@ async fn test_io_parent_waiting_on_same_full_domain_remains_pending() {
     assert_eq!(services.snapshot().io.unwrap().accepted_unfinished, 1);
 
     let _stop_report = services.stop();
-    let _parent_result = timeout(Duration::from_secs(1), parent)
+    let _parent_result = timeout(TEST_TIMEOUT, parent)
         .await
         .expect("stop should release the accepted parent task");
-    timeout(Duration::from_secs(1), services.await_termination())
+    timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("stopped IO service should terminate");
     assert!(services.is_terminated());

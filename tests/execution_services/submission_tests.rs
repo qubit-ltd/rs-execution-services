@@ -30,6 +30,24 @@ use tokio::task::yield_now;
 use tokio::test as tokio_test;
 use tokio::time::timeout;
 
+use super::GateRelease;
+
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[test]
+fn test_gate_release_drop_unblocks_waiting_worker() {
+    let (release_tx, release_rx) = mpsc::channel();
+    let gate = GateRelease(Some(release_tx));
+    let worker = std::thread::spawn(move || release_rx.recv_timeout(TEST_TIMEOUT));
+
+    drop(gate);
+
+    worker
+        .join()
+        .expect("gate worker should exit")
+        .expect("dropping the gate should send a release signal");
+}
+
 fn create_runtime() -> Runtime {
     Builder::new_current_thread()
         .enable_all()
@@ -59,11 +77,31 @@ fn test_execution_services_submit_blocking_and_cpu_tasks() {
         .submit_cpu_callable(|| Ok::<usize, io::Error>(6 * 7))
         .expect("cpu domain should accept callable");
 
-    assert_eq!(blocking.get().expect("blocking task should complete successfully"), 42,);
-    assert_eq!(cpu.get().expect("cpu task should complete successfully"), 42);
+    assert_eq!(
+        runtime.block_on(async {
+            timeout(TEST_TIMEOUT, async { blocking.await })
+                .await
+                .expect("blocking task should finish before the diagnostic timeout")
+                .expect("blocking task should complete successfully")
+        }),
+        42,
+    );
+    assert_eq!(
+        runtime.block_on(async {
+            timeout(TEST_TIMEOUT, async { cpu.await })
+                .await
+                .expect("CPU task should finish before the diagnostic timeout")
+                .expect("CPU task should complete successfully")
+        }),
+        42
+    );
     services.shutdown();
     assert!(services.is_not_running());
-    create_runtime().block_on(services.await_termination());
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+    });
     assert!(services.is_not_running());
     assert!(services.is_terminated());
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
@@ -85,14 +123,19 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
         .expect("execution services should be created");
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     let running = services
         .submit_tracked_cpu(move || {
             started_tx.send(()).expect("cpu task should start");
-            release_rx.recv().expect("cpu task should be released");
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("CPU task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("running CPU task should be accepted");
-    started_rx.recv().expect("cpu task should start");
+    started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("CPU task should signal that it started");
     let queued = services
         .submit_tracked_cpu(|| Ok::<(), io::Error>(()))
         .expect("queued CPU task should be accepted");
@@ -103,15 +146,32 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
         })
     ));
     assert_eq!(queued.cancel(), CancelResult::Cancelled);
-    let _ = queued.get().expect_err("queued task should be cancelled");
+    let queued_result = runtime.block_on(async {
+        timeout(TEST_TIMEOUT, async { queued.await })
+            .await
+            .expect("cancelled queued CPU task should complete")
+    });
+    assert!(matches!(queued_result, Err(TaskExecutionError::Cancelled)));
     let replacement = services
         .submit_cpu_callable(|| Ok::<(), io::Error>(()))
         .expect("cancelled CPU capacity should be reusable");
-    release_tx.send(()).expect("running CPU task should be released");
-    running.get().expect("running CPU task should finish");
-    replacement.get().expect("replacement CPU task should finish");
+    gate.release();
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, async { running.await })
+            .await
+            .expect("running CPU task should finish before the diagnostic timeout")
+            .expect("running CPU task should complete successfully");
+        timeout(TEST_TIMEOUT, async { replacement.await })
+            .await
+            .expect("replacement CPU task should finish before the diagnostic timeout")
+            .expect("replacement CPU task should complete successfully");
+    });
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("execution services should terminate before the diagnostic timeout");
+    });
 }
 
 #[test]
@@ -163,15 +223,30 @@ fn test_execution_services_submit_sync_runnables_and_tracked_callables() {
     completed.sort_unstable();
     assert_eq!(completed, ["blocking", "cpu"]);
     assert_eq!(
-        blocking_callable
-            .get()
-            .expect("blocking tracked callable should complete"),
+        runtime.block_on(async {
+            timeout(TEST_TIMEOUT, async { blocking_callable.await })
+                .await
+                .expect("blocking tracked callable should finish before the diagnostic timeout")
+                .expect("blocking tracked callable should complete")
+        }),
         42,
     );
-    assert_eq!(cpu_callable.get().expect("cpu tracked callable should complete"), 42,);
+    assert_eq!(
+        runtime.block_on(async {
+            timeout(TEST_TIMEOUT, async { cpu_callable.await })
+                .await
+                .expect("CPU tracked callable should finish before the diagnostic timeout")
+                .expect("CPU tracked callable should complete")
+        }),
+        42,
+    );
 
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+    });
 }
 
 #[test]
@@ -189,25 +264,30 @@ fn test_execution_services_reports_shutdown_while_task_is_running() {
         .expect("execution services should be created");
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_sender));
 
     services
         .submit_blocking(move || {
             started_sender.send(()).expect("blocking task should report start");
             release_receiver
-                .recv_timeout(Duration::from_secs(2))
-                .expect("blocking task should be released");
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("blocking domain should accept runnable");
     started_receiver
-        .recv_timeout(Duration::from_secs(2))
-        .expect("blocking task should start");
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should signal that it started");
 
     services.shutdown();
     assert!(services.is_shutting_down());
     assert!(services.is_not_running());
-    release_sender.send(()).expect("blocking task release should be sent");
-    create_runtime().block_on(services.await_termination());
+    gate.release();
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+    });
     assert!(services.is_terminated());
 }
 
@@ -238,10 +318,11 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
     );
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     services
         .submit_blocking(move || {
             started_tx.send(()).expect("start signal");
-            release_rx.recv().expect("release signal");
+            release_rx.recv_timeout(TEST_TIMEOUT).expect("release signal");
             Ok::<(), io::Error>(())
         })
         .expect("running task should be accepted");
@@ -262,8 +343,12 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
         })
     ));
     assert!(services.is_shutting_down());
-    release_tx.send(()).expect("release worker");
-    runtime.block_on(services.await_termination());
+    gate.release();
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+    });
     assert!(services.is_terminated());
 }
 
@@ -312,7 +397,11 @@ fn test_closed_facade_rejected_task_drop_may_request_stop() {
         })
     ));
     assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
-    runtime.block_on(services.await_termination());
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+    });
     assert!(services.is_terminated());
 }
 
@@ -336,25 +425,35 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
         .expect("execution services should be created");
     let (blocking_started_tx, blocking_started_rx) = mpsc::channel();
     let (blocking_release_tx, blocking_release_rx) = mpsc::channel();
+    let mut blocking_gate = GateRelease(Some(blocking_release_tx));
     let (cpu_started_tx, cpu_started_rx) = mpsc::channel();
     let (cpu_release_tx, cpu_release_rx) = mpsc::channel();
+    let mut cpu_gate = GateRelease(Some(cpu_release_tx));
 
     services
         .submit_blocking(move || {
             blocking_started_tx.send(()).expect("blocking task should start");
-            blocking_release_rx.recv().expect("blocking task should be released");
+            blocking_release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("blocking task should be accepted");
     services
         .submit_cpu(move || {
             cpu_started_tx.send(()).expect("CPU task should start");
-            cpu_release_rx.recv().expect("CPU task should be released");
+            cpu_release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("CPU task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("CPU task should be accepted");
-    blocking_started_rx.recv().expect("blocking task should start");
-    cpu_started_rx.recv().expect("CPU task should start");
+    blocking_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should signal that it started");
+    cpu_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("CPU task should signal that it started");
     services.shutdown();
 
     runtime.block_on(async {
@@ -364,11 +463,13 @@ fn test_await_termination_completes_with_one_tokio_blocking_thread() {
             result = &mut waiter => panic!("held tasks should keep termination pending: {result:?}"),
             _ = async {
                 yield_now().await;
-                blocking_release_tx.send(()).expect("blocking task release should be sent");
-                cpu_release_tx.send(()).expect("CPU task release should be sent");
+                blocking_gate.release();
+                cpu_gate.release();
             } => {}
         }
-        waiter.await;
+        timeout(TEST_TIMEOUT, &mut waiter)
+            .await
+            .expect("services should terminate before the diagnostic timeout");
     });
 
     assert!(services.is_terminated());
@@ -394,16 +495,21 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
         .expect("services should build");
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     services
         .submit_blocking(move || {
             started_tx.send(()).expect("task should signal start");
-            release_rx.recv().expect("task should be released");
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("blocking task should be accepted");
-    started_rx.recv().expect("task should start");
+    started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should signal that it started");
     let (io_gate_tx, io_gate_rx) = oneshot::channel();
-    let io_release_tx = release_tx.clone();
+    let io_release_tx = gate.sender();
     services
         .spawn_io(async move {
             io_gate_rx.await.expect("IO gate should open");
@@ -423,7 +529,7 @@ fn test_await_termination_does_not_starve_io_spawn_blocking() {
         io_gate_tx.send(()).expect("IO gate should open");
         let completed = timeout(Duration::from_secs(2), &mut wait).await;
         if completed.is_err() {
-            let _ = release_tx.send(());
+            gate.release();
             let _ = timeout(Duration::from_secs(2), &mut wait).await;
         }
         assert!(completed.is_ok(), "termination wait starved IO spawn_blocking");
@@ -450,14 +556,19 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
         .expect("services should build");
     let (started_tx, started_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_tx));
     services
         .submit_blocking(move || {
             started_tx.send(()).expect("task should signal start");
-            release_rx.recv().expect("task should be released");
+            release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("blocking task should be accepted");
-    started_rx.recv().expect("task should start");
+    started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should signal that it started");
     services.shutdown();
 
     runtime.block_on(async {
@@ -466,8 +577,10 @@ fn test_cancelled_termination_wait_releases_tokio_blocking_capacity() {
         drop(wait);
         let sentinel = spawn_blocking(|| 42);
         let completed = timeout(Duration::from_secs(2), sentinel).await;
-        release_tx.send(()).expect("blocking task should release");
-        services.await_termination().await;
+        gate.release();
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
         assert!(completed.is_ok(), "cancelled wait retained a blocking worker");
     });
 }
@@ -491,14 +604,23 @@ async fn test_execution_services_submit_tokio_blocking_and_io_tasks() {
         .expect("io domain should accept future");
 
     assert_eq!(
-        blocking
+        timeout(TEST_TIMEOUT, async { blocking.await })
             .await
+            .expect("Tokio blocking task should finish before the diagnostic timeout")
             .expect("tokio blocking task should complete successfully"),
         42,
     );
-    assert_eq!(io.await.expect("io task should complete successfully"), 42);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, io)
+            .await
+            .expect("IO task should finish before the diagnostic timeout")
+            .expect("io task should complete successfully"),
+        42
+    );
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -536,14 +658,19 @@ async fn test_execution_services_submit_tokio_runnable_and_tracked_callable() {
         "tokio-blocking",
     );
     assert_eq!(
-        callable.await.expect("tokio blocking tracked callable should complete"),
+        timeout(TEST_TIMEOUT, async { callable.await })
+            .await
+            .expect("Tokio blocking callable should finish before the diagnostic timeout")
+            .expect("tokio blocking tracked callable should complete"),
         42,
     );
 
     services.shutdown();
     assert!(!services.is_running());
     assert!(services.is_not_running());
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
     assert!(services.is_terminated());
 }
 
@@ -562,6 +689,7 @@ async fn test_execution_services_stop_aggregates_reports() {
         .expect("execution services should be created");
     let (blocking_started_sender, blocking_started_receiver) = mpsc::channel();
     let (blocking_release_sender, blocking_release_receiver) = mpsc::channel();
+    let mut blocking_gate = GateRelease(Some(blocking_release_sender));
 
     let running = services
         .submit_tracked_blocking(move || {
@@ -569,7 +697,7 @@ async fn test_execution_services_stop_aggregates_reports() {
                 .send(())
                 .expect("blocking task should report that it started");
             blocking_release_receiver
-                .recv()
+                .recv_timeout(TEST_TIMEOUT)
                 .expect("blocking task should be released");
             Ok::<(), io::Error>(())
         })
@@ -583,6 +711,7 @@ async fn test_execution_services_stop_aggregates_reports() {
 
     let (tokio_blocking_started_sender, tokio_blocking_started_receiver) = mpsc::channel();
     let (tokio_blocking_release_sender, tokio_blocking_release_receiver) = mpsc::channel();
+    let mut tokio_blocking_gate = GateRelease(Some(tokio_blocking_release_sender));
 
     let blocking = services
         .submit_tracked_tokio_blocking(move || {
@@ -590,7 +719,7 @@ async fn test_execution_services_stop_aggregates_reports() {
                 .send(())
                 .expect("Tokio blocking task should report that it started");
             tokio_blocking_release_receiver
-                .recv()
+                .recv_timeout(TEST_TIMEOUT)
                 .expect("Tokio blocking task should be released");
             Ok::<(), io::Error>(())
         })
@@ -609,7 +738,10 @@ async fn test_execution_services_stop_aggregates_reports() {
             Ok::<(), io::Error>(())
         })
         .expect("io domain should accept task");
-    io_started_receiver.await.expect("IO future should start before stop");
+    timeout(TEST_TIMEOUT, io_started_receiver)
+        .await
+        .expect("IO future should start before the diagnostic timeout")
+        .expect("IO future should start before stop");
 
     let report = services.stop();
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
@@ -624,13 +756,11 @@ async fn test_execution_services_stop_aggregates_reports() {
     assert_eq!(io_report.running, 1);
     assert_eq!(io_report.cancelled, 1);
 
-    blocking_release_sender
-        .send(())
-        .expect("blocking task release should be sent");
-    tokio_blocking_release_sender
-        .send(())
-        .expect("Tokio blocking task release should be sent");
-    services.await_termination().await;
+    blocking_gate.release();
+    tokio_blocking_gate.release();
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 
     let cpu_report = report.cpu.expect("CPU enabled");
     assert_eq!(cpu_report.queued, 0);
@@ -638,12 +768,22 @@ async fn test_execution_services_stop_aggregates_reports() {
     assert_eq!(cpu_report.cancelled, 0);
     assert!(services.is_not_running());
     assert!(services.is_terminated());
-    running
-        .get()
-        .expect("running blocking task should finish after release");
-    assert!(matches!(queued.get(), Err(TaskExecutionError::Cancelled)));
-    assert!(matches!(blocking.await, Ok(()) | Err(TaskExecutionError::Cancelled)));
-    assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
+    timeout(TEST_TIMEOUT, async { running.await })
+        .await
+        .expect("running blocking task should finish after release")
+        .expect("running blocking task should complete");
+    let queued_result = timeout(TEST_TIMEOUT, async { queued.await })
+        .await
+        .expect("queued blocking task should finish before the diagnostic timeout");
+    assert!(matches!(queued_result, Err(TaskExecutionError::Cancelled)));
+    let blocking_result = timeout(TEST_TIMEOUT, async { blocking.await })
+        .await
+        .expect("Tokio blocking task should finish before the diagnostic timeout");
+    assert!(matches!(blocking_result, Ok(()) | Err(TaskExecutionError::Cancelled)));
+    let io_result = timeout(TEST_TIMEOUT, io)
+        .await
+        .expect("IO task should finish before the diagnostic timeout");
+    assert!(matches!(io_result, Err(TaskExecutionError::Cancelled)));
 }
 
 #[tokio_test]
@@ -666,7 +806,9 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
             source: SubmissionError::Shutdown
         })
     ));
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
@@ -708,7 +850,9 @@ async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() 
             source: SubmissionError::Shutdown
         })
     ));
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -750,7 +894,9 @@ async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutd
             source: SubmissionError::Shutdown
         })
     ));
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
 }
 
 #[tokio_test]
@@ -767,6 +913,7 @@ async fn test_execution_services_stop_intent_survives_shutdown() {
         .expect("execution services should be created");
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
+    let mut gate = GateRelease(Some(release_sender));
 
     services
         .submit_blocking(move || {
@@ -774,14 +921,14 @@ async fn test_execution_services_stop_intent_survives_shutdown() {
                 .send(())
                 .expect("blocking task should report that it started");
             release_receiver
-                .recv_timeout(Duration::from_secs(5))
-                .expect("blocking task should be released");
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task release gate should open");
             Ok::<(), io::Error>(())
         })
         .expect("blocking domain should accept the task");
     started_receiver
-        .recv_timeout(Duration::from_secs(5))
-        .expect("blocking task should start");
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should signal that it started");
 
     services.shutdown();
     let _report = services.stop();
@@ -789,8 +936,10 @@ async fn test_execution_services_stop_intent_survives_shutdown() {
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Stopping);
     assert!(services.is_stopping());
 
-    release_sender.send(()).expect("blocking task should be released");
-    services.await_termination().await;
+    gate.release();
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Terminated);
 }
 
@@ -900,7 +1049,10 @@ async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
     let parent = services
         .spawn_io(async move {
             started_tx.send(()).expect("parent task should report that it started");
-            release_rx.await.expect("parent task should be released");
+            timeout(TEST_TIMEOUT, release_rx)
+                .await
+                .expect("IO parent release gate should open before the diagnostic timeout")
+                .expect("parent task should be released");
             let result = child_services.submit_cpu_callable(|| Ok::<u8, io::Error>(42));
             assert!(matches!(
                 result,
@@ -912,11 +1064,19 @@ async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
         })
         .expect("IO parent task should be accepted");
 
-    started_rx.await.expect("parent task should report that it started");
+    timeout(TEST_TIMEOUT, started_rx)
+        .await
+        .expect("parent task should start before the diagnostic timeout")
+        .expect("parent task should report that it started");
     services.shutdown();
     release_tx.send(()).expect("parent task should be released");
-    parent.await.expect("parent task should complete");
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, parent)
+        .await
+        .expect("parent task should complete before the diagnostic timeout")
+        .expect("parent task should complete");
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
     assert!(services.is_terminated());
 }
 
@@ -939,18 +1099,36 @@ async fn test_drain_producer_before_shutdown_allows_child_submission() {
             started_tx
                 .send(())
                 .expect("producer task should report that it started");
-            release_rx.await.expect("producer task should be released");
+            timeout(TEST_TIMEOUT, release_rx)
+                .await
+                .expect("IO producer release gate should open before the diagnostic timeout")
+                .expect("producer task should be released");
             let child = child_services
                 .submit_cpu_callable(|| Ok::<u8, io::Error>(42))
                 .expect("child CPU task should be accepted before shutdown");
-            Ok::<u8, io::Error>(child.await.expect("child CPU task should complete"))
+            let child_result = timeout(TEST_TIMEOUT, async { child.await })
+                .await
+                .expect("child CPU task should finish before the diagnostic timeout")
+                .expect("child CPU task should complete");
+            Ok::<u8, io::Error>(child_result)
         })
         .expect("IO producer task should be accepted");
 
-    started_rx.await.expect("producer task should report that it started");
+    timeout(TEST_TIMEOUT, started_rx)
+        .await
+        .expect("producer task should start before the diagnostic timeout")
+        .expect("producer task should report that it started");
     release_tx.send(()).expect("producer task should be released");
-    assert_eq!(producer.await.expect("producer task should complete"), 42);
+    assert_eq!(
+        timeout(TEST_TIMEOUT, producer)
+            .await
+            .expect("producer task should complete before the diagnostic timeout")
+            .expect("producer task should complete"),
+        42
+    );
     services.shutdown();
-    services.await_termination().await;
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the diagnostic timeout");
     assert!(services.is_terminated());
 }

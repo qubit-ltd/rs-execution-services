@@ -14,10 +14,10 @@ Each domain owns its own capacity and queue. The facade is not a shared schedule
 
 - `execution_services.rs` owns the facade, builder entry point, domain inventory, and snapshot composition.
 - `submission.rs` implements immediate submission and the shared native submission adapter.
-- `waiting_submission.rs` implements the four capacity-wait APIs as thin adapters over the common retry loop.
+- `waiting_submission.rs` implements the four capacity-wait APIs. Blocking uses the owned-task wrapper and shared retry loop; CPU, Tokio blocking, and IO retry through their native task-returning rejection APIs.
 - `internal/execution_services_admission.rs` owns monotonic facade intent and resolves a requested optional domain.
-- `internal/submission_retry.rs` retries only saturation, waiting on a capacity-change receiver between attempts.
-- `internal/owned_wait_task.rs` retains the one-shot callable or future while rejected attempt wrappers are dropped.
+- `internal/submission_retry.rs` retries blocking submissions only when they are saturated, waiting on a capacity-change receiver between attempts.
+- `internal/owned_wait_task.rs` retains the blocking callable while rejected attempt wrappers are dropped.
 - `lifecycle.rs` closes each enabled domain and asynchronously waits for termination.
 
 The Tokio `sync` feature is a direct dependency because the retry module names Tokio's `watch::Receiver` API directly.
@@ -40,11 +40,11 @@ Admission and native acceptance are not one atomic transaction. A call that pass
 
 ## Capacity-wait algorithm
 
-A wait API returns a lazy future. It starts when first polled, resolves the domain, stores the user task in `OwnedWaitTask`, and subscribes to capacity changes before its first attempt. Each attempt passes a fresh wrapper to the native executor. If accepted, the handle is returned. If saturated, the future waits for a watch notification and retries. Other submission errors return immediately. If the notification channel closes, the wait returns Shutdown instead of remaining pending forever.
+A wait API returns a lazy future. It starts when first polled, resolves the domain, and subscribes to capacity changes before its first submission attempt. Blocking stores the callable in `OwnedWaitTask` and uses a fresh wrapper for each attempt; CPU, Tokio blocking, and IO retain the original callable or future in the waiting future and use native `try_*` APIs that return that task when rejected. All four return a handle after acceptance, retry only after saturation and a capacity-change notification, and return other errors immediately. If the notification channel closes, the wait returns Shutdown instead of remaining pending forever.
 
 Capacity notifications are advisory: they indicate a state change, not a reservation. A competing submitter can consume the available capacity before a waiter retries. No FIFO ordering, fairness, or wait-time bound is guaranteed.
 
-`OwnedWaitTask` holds `Option<T>` behind a mutex shared with attempt wrappers. A rejected wrapper leaves the task in the slot. An accepted callable wrapper takes the callable when executed; an accepted IO wrapper takes the future on first poll. The slot lock is released before user code runs. This makes task movement independent of `Clone` and prevents retries from invoking a one-shot task more than once.
+For blocking, `OwnedWaitTask` holds `Option<C>` behind a mutex shared with attempt wrappers. A rejected wrapper leaves the callable in the slot; an accepted wrapper takes it when executed. The other domains recover the original task directly from the native rejection value and retain it across retries. No path requires `Clone`, and a one-shot task is submitted for execution at most once.
 
 Capacity limits count accepted work only. Waiters that have not been accepted are not included in `accepted_unfinished` snapshots or task-capacity limits, even though their futures retain user data. Applications that need a memory bound must limit concurrent producers or add application-level timeouts/backpressure.
 

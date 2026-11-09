@@ -14,10 +14,10 @@
 
 - `execution_services.rs` 管理门面、Builder 入口、执行域清单和快照组合。
 - `submission.rs` 实现立即提交和共享 native 提交适配。
-- `waiting_submission.rs` 将四个容量等待 API 适配到同一重试循环。
+- `waiting_submission.rs` 实现四个容量等待 API。blocking 使用任务所有权包装器和共享重试循环；CPU、Tokio blocking 和 IO 使用原生拒绝返回任务的 API 重试。
 - `internal/execution_services_admission.rs` 管理单调关闭的门面意图并解析请求域。
-- `internal/submission_retry.rs` 只在饱和时重试，在尝试之间等待容量变化通知。
-- `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有一次性 callable 或 future。
+- `internal/submission_retry.rs` 仅在 blocking 提交饱和时重试，并在尝试之间等待容量变化通知。
+- `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有 blocking callable。
 - `lifecycle.rs` 关闭各启用域，并通过异步通知等待终止。
 
 由于重试模块直接使用 Tokio 的 `watch::Receiver` 类型，Tokio `sync` 是显式直接依赖 feature。
@@ -40,13 +40,13 @@
 
 ## 容量等待算法
 
-wait API 返回惰性 future。首次 poll 时，它解析目标域，将业务任务放入 `OwnedWaitTask`，并在第一次提交尝试前订阅容量变化。每次尝试向底层服务传入新的包装器。任务接收成功后返回句柄；遇到饱和时等待 watch 通知并重试；其他错误立即返回。若通知通道关闭，等待会返回 Shutdown，不会永久 Pending。
+wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第一次提交尝试前订阅容量变化。blocking 将 callable 放入 `OwnedWaitTask`，每次尝试使用新的包装器；CPU、Tokio blocking 和 IO 则由等待 future 持有原 callable 或 future，并使用原生 `try_*` API 在拒绝时取回任务。四个 API 在接纳后返回句柄，仅在饱和并收到容量变化通知后重试，其他错误立即返回。若通知通道关闭，等待会返回 Shutdown，不会永久 Pending。
 
 容量通知只说明状态发生变化，不会为等待者保留额度。其他提交者可能先取得可用容量。系统不保证 FIFO、公平性或等待时间上限。
 
 容量仅统计已接收任务。尚未获接纳的等待者不计入 `accepted_unfinished` 快照或域任务容量，即使其 future 仍持有业务数据。应用若需要内存上限，应限制并发生产者，或在应用层设置超时和背压。
 
-`OwnedWaitTask` 用互斥保护共享的 `Option<T>`。被拒绝的包装器退出时，任务仍在槽位中。callable 包装器在开始执行时取走 callable；IO 包装器在首次 poll 时取走 future。取走后先释放槽位互斥，再执行用户代码。任务不需要实现 `Clone`，重试也不会多次调用一次性任务。
+在 blocking 域中，`OwnedWaitTask` 用互斥保护共享的 `Option<C>`。被拒绝的包装器退出时，callable 仍在槽位中；接纳后的包装器在执行时取走 callable。其他域通过原生拒绝值直接取回任务，并在重试期间保留它。所有路径都不要求任务实现 `Clone`，一次性任务最多只会被接纳执行一次。
 
 ## 取消与生命周期
 

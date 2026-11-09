@@ -20,46 +20,94 @@ jobs:
           path: rs-execution-services
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
+          repository: qubit-ltd/rs-executor
+          ref: 96c6006e5f6e5d59959695893d7f4e8697d21a54
+          path: rs-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-rayon-executor
+          ref: 2caaa944acf2fb4dab977200b517ba1f59a759ce
+          path: rs-rayon-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-tokio-executor
+          ref: ca18599285e372da3f0074aba69e687ecc3af4a0
+          path: rs-tokio-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
           repository: qubit-ltd/rs-ioc
           ref: main
           path: rs-ioc
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-event-bus
-          ref: 563552b58fe5cfa93f0f4f4295e7ca4e70911be1
+          ref: 3806b857e177c06b3e7830440c63d06033e0acf8
           path: rs-event-bus
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-config
-          ref: 80d80b0d3c282bcc441b2c1cff1539941f501594
+          ref: d6f72b0e0a7f10e8dbc1654d25a1050fbe295c29
           path: rs-config
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-fs-registry
-          ref: 8e8940cc295b0e277241c397bea559214a272fb5
+          ref: 6017e52712b70a4ab204e8b3b3f9963859f46075
           path: rs-fs-registry
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-fs-local
-          ref: 7f0959f15355d3be97c681f588f0ab23ce8d40d1
+          ref: a844d99548a9a3d751d2b005c8fd7368771cedf4
           path: rs-fs-local
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-fs
-          ref: 4bc4d9e430719d56429f65224a112d640af51478
+          ref: 6fc76f0b3dd0d7795d000c11cac749a3791402c2
           path: rs-fs
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-redact
+          ref: 133954d6d24ed831f5133f2bd3d42a554f5e52ad
+          path: rs-redact
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-local-files
+          ref: d4235f2dcfa34cf09ea1bf49ba4fe70bb4307c89
+          path: rs-local-files
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-fs-testkit
+          ref: b9425fec4cd142826f95cede3715db57b82d8b08
+          path: rs-fs-testkit
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-value
+          ref: 6f5ae6e2acd592dcb07d30b232b84735e1cc592d
+          path: rs-value
       - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
           toolchain: 1.94.0
+      - name: Use repository-pinned lock for the current IoC consumer
+        working-directory: rs-execution-services
+        run: |
+          mkdir -p ../rs-ioc/.cargo
+          cp .cargo/config.toml ../rs-ioc/.cargo/config.toml
+          cp tests/fixtures/ioc_application_consumer_current/Cargo.lock ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.lock
       - name: Record exact source revisions and hashes
         run: |
           git -C rs-ioc rev-parse HEAD
           git -C rs-execution-services rev-parse HEAD
+          git -C rs-executor rev-parse HEAD
+          git -C rs-rayon-executor rev-parse HEAD
+          git -C rs-tokio-executor rev-parse HEAD
           git -C rs-event-bus rev-parse HEAD
           git -C rs-config rev-parse HEAD
           git -C rs-fs-registry rev-parse HEAD
           git -C rs-fs-local rev-parse HEAD
           git -C rs-fs rev-parse HEAD
+          git -C rs-redact rev-parse HEAD
+          git -C rs-local-files rev-parse HEAD
+          git -C rs-fs-testkit rev-parse HEAD
+          git -C rs-value rev-parse HEAD
           rustc +1.94.0 --version --verbose
           cargo +1.94.0 --version
           sha256sum "$(rustup which --toolchain 1.94.0 rustc)"
@@ -68,14 +116,14 @@ jobs:
           sha256sum rs-execution-services/tests/fixtures/ioc_application_consumer/tests/*.rs
           sha256sum rs-execution-services/tests/fixtures/ioc_application_consumer/tests/internal/*.rs
       - name: Verify current consumer IoC feature isolation
-        working-directory: rs-ioc
-        run: python3 .infra/tools/check-manual-feature-isolation.py --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --package ioc-downstream-consumer-current
+        working-directory: rs-execution-services
+        run: python3 ../rs-ioc/.infra/tools/check-manual-feature-isolation.py --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --package ioc-downstream-consumer-current
       - name: Check downstream consumer against this IoC revision
-        working-directory: rs-ioc
-        run: cargo +1.94.0 check --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-execution-services
+        run: cargo +1.94.0 check --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
       - name: Test downstream consumer against this IoC revision
-        working-directory: rs-ioc
-        run: cargo +1.94.0 test --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-execution-services
+        run: cargo +1.94.0 test --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
       - name: Run downstream consumer against this IoC revision
-        working-directory: rs-ioc
-        run: cargo +1.94.0 run --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-execution-services
+        run: cargo +1.94.0 run --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
