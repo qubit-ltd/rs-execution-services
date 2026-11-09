@@ -8,6 +8,7 @@
 //! Tests waiting submission and cancellation across execution domains.
 
 use std::future::Future;
+use std::future::IntoFuture;
 use std::io;
 use std::num::NonZeroUsize;
 use std::pin::Pin;
@@ -35,7 +36,7 @@ use super::GateRelease;
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(5);
 
-async fn poll_once<F: Future>(mut future: Pin<&mut F>) -> Poll<F::Output> {
+async fn poll_once<F: Future + ?Sized>(mut future: Pin<&mut F>) -> Poll<F::Output> {
     std::future::poll_fn(|context| Poll::Ready(future.as_mut().poll(context))).await
 }
 
@@ -52,12 +53,604 @@ struct PollCounterFuture {
     _drop_counter: DropCounter,
 }
 
+type ErasedTask = Pin<Box<dyn Future<Output = Result<(), TaskExecutionError<io::Error>>> + Send>>;
+type ErasedWait<'a> = Pin<Box<dyn Future<Output = Result<ErasedTask, ExecutionServicesSubmissionError>> + Send + 'a>>;
+
+#[derive(Clone, Copy, Debug)]
+enum WaitCompetitionDomain {
+    Blocking,
+    Cpu,
+    TokioBlocking,
+    Io,
+}
+
+impl WaitCompetitionDomain {
+    fn all() -> [Self; 4] {
+        [Self::Blocking, Self::Cpu, Self::TokioBlocking, Self::Io]
+    }
+}
+
+#[derive(Clone, Copy)]
+enum WaitCompetitionScenario {
+    Progress,
+    Shutdown,
+    Stop,
+}
+
+impl WaitCompetitionScenario {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Progress => "progress",
+            Self::Shutdown => "shutdown",
+            Self::Stop => "stop",
+        }
+    }
+}
+
+struct ScenarioRelease(Option<Box<dyn FnOnce() + Send>>);
+
+impl ScenarioRelease {
+    fn release(&mut self) {
+        if let Some(release) = self.0.take() {
+            release();
+        }
+    }
+}
+
+impl Drop for ScenarioRelease {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+enum WaiterGate {
+    Blocking(mpsc::Receiver<()>),
+    Io(oneshot::Receiver<()>),
+}
+
+fn mpsc_gate() -> (ScenarioRelease, mpsc::Receiver<()>) {
+    let (sender, receiver) = mpsc::channel();
+    let release = ScenarioRelease(Some(Box::new(move || {
+        let _ = sender.send(());
+    })));
+    (release, receiver)
+}
+
+fn oneshot_gate() -> (ScenarioRelease, oneshot::Receiver<()>) {
+    let (sender, receiver) = oneshot::channel();
+    let release = ScenarioRelease(Some(Box::new(move || {
+        let _ = sender.send(());
+    })));
+    (release, receiver)
+}
+
+fn waiter_gate(domain: WaitCompetitionDomain) -> (ScenarioRelease, WaiterGate) {
+    match domain {
+        WaitCompetitionDomain::Io => {
+            let (release, gate) = oneshot_gate();
+            (release, WaiterGate::Io(gate))
+        }
+        _ => {
+            let (release, gate) = mpsc_gate();
+            (release, WaiterGate::Blocking(gate))
+        }
+    }
+}
+
+fn erase_task_handle<H>(handle: H) -> ErasedTask
+where
+    H: IntoFuture<Output = Result<(), TaskExecutionError<io::Error>>> + Send + 'static,
+    H::IntoFuture: Send + 'static,
+{
+    Box::pin(async move { handle.await })
+}
+
+fn build_competition_services(domain: WaitCompetitionDomain) -> ExecutionServices {
+    let builder = ExecutionServices::builder();
+    match domain {
+        WaitCompetitionDomain::Blocking => builder
+            .enable_blocking()
+            .blocking_pool_size(1)
+            .blocking_queue_capacity(1)
+            .build()
+            .expect("blocking competition services should build"),
+        WaitCompetitionDomain::Cpu => builder
+            .enable_cpu()
+            .cpu_threads(1)
+            .cpu_task_capacity(1)
+            .build()
+            .expect("CPU competition services should build"),
+        WaitCompetitionDomain::TokioBlocking => builder
+            .enable_tokio_blocking()
+            .runtime(Handle::current())
+            .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity is nonzero"))
+            .build()
+            .expect("Tokio blocking competition services should build"),
+        WaitCompetitionDomain::Io => builder
+            .enable_io()
+            .runtime(Handle::current())
+            .io_task_capacity(NonZeroUsize::new(1).expect("capacity is nonzero"))
+            .build()
+            .expect("IO competition services should build"),
+    }
+}
+
+struct OccupiedCapacity {
+    releases: Vec<ScenarioRelease>,
+    queued_started: Option<mpsc::Receiver<()>>,
+    tasks: Vec<ErasedTask>,
+}
+
+fn occupy_competition_capacity(services: &ExecutionServices, domain: WaitCompetitionDomain) -> OccupiedCapacity {
+    let (started_tx, started_rx) = mpsc::channel();
+    match domain {
+        WaitCompetitionDomain::Blocking => {
+            let (running_release, running_gate) = mpsc_gate();
+            let running_started = started_tx.clone();
+            let running = services
+                .submit_blocking_callable(move || {
+                    running_started
+                        .send(())
+                        .expect("running blocker observer should remain available");
+                    running_gate
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("blocking running gate should open");
+                    Ok::<(), io::Error>(())
+                })
+                .expect("blocking running placeholder should be accepted");
+            started_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking running placeholder should start");
+
+            let (queued_started_tx, queued_started_rx) = mpsc::channel();
+            let (queued_release, queued_gate) = mpsc_gate();
+            let queued = services
+                .submit_blocking_callable(move || {
+                    queued_started_tx
+                        .send(())
+                        .expect("queued blocker observer should remain available");
+                    queued_gate
+                        .recv_timeout(TEST_TIMEOUT)
+                        .expect("blocking queued gate should open");
+                    Ok::<(), io::Error>(())
+                })
+                .expect("blocking queue placeholder should be accepted");
+            OccupiedCapacity {
+                releases: vec![running_release, queued_release],
+                queued_started: Some(queued_started_rx),
+                tasks: vec![erase_task_handle(running), erase_task_handle(queued)],
+            }
+        }
+        WaitCompetitionDomain::Cpu => {
+            let (release, gate) = mpsc_gate();
+            let started = started_tx;
+            let task = services
+                .submit_cpu_callable(move || {
+                    started.send(()).expect("CPU blocker observer should remain available");
+                    gate.recv_timeout(TEST_TIMEOUT).expect("CPU gate should open");
+                    Ok::<(), io::Error>(())
+                })
+                .expect("CPU capacity placeholder should be accepted");
+            started_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("CPU placeholder should start");
+            OccupiedCapacity {
+                releases: vec![release],
+                queued_started: None,
+                tasks: vec![erase_task_handle(task)],
+            }
+        }
+        WaitCompetitionDomain::TokioBlocking => {
+            let (release, gate) = mpsc_gate();
+            let started = started_tx;
+            let task = services
+                .submit_tokio_blocking_callable(move || {
+                    started
+                        .send(())
+                        .expect("Tokio blocking observer should remain available");
+                    gate.recv_timeout(TEST_TIMEOUT)
+                        .expect("Tokio blocking gate should open");
+                    Ok::<(), io::Error>(())
+                })
+                .expect("Tokio blocking capacity placeholder should be accepted");
+            started_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("Tokio blocking placeholder should start");
+            OccupiedCapacity {
+                releases: vec![release],
+                queued_started: None,
+                tasks: vec![erase_task_handle(task)],
+            }
+        }
+        WaitCompetitionDomain::Io => {
+            let (release, gate) = oneshot_gate();
+            let started = started_tx;
+            let task = services
+                .spawn_io(async move {
+                    started.send(()).expect("IO blocker observer should remain available");
+                    gate.await.expect("IO gate should open");
+                    Ok::<(), io::Error>(())
+                })
+                .expect("IO capacity placeholder should be accepted");
+            started_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("IO placeholder should start");
+            OccupiedCapacity {
+                releases: vec![release],
+                queued_started: None,
+                tasks: vec![erase_task_handle(task)],
+            }
+        }
+    }
+}
+
+fn make_competition_waiter<'a>(
+    services: &'a ExecutionServices,
+    domain: WaitCompetitionDomain,
+    task_id: usize,
+    started: mpsc::Sender<usize>,
+    gate: WaiterGate,
+    calls: Arc<AtomicUsize>,
+    drops: Arc<AtomicUsize>,
+) -> ErasedWait<'a> {
+    let drop_counter = DropCounter(drops);
+    match domain {
+        WaitCompetitionDomain::Blocking => {
+            let WaiterGate::Blocking(gate) = gate else {
+                unreachable!("blocking waiter needs an mpsc gate")
+            };
+            Box::pin(async move {
+                services
+                    .submit_blocking_callable_wait(move || {
+                        let _drop_counter = drop_counter;
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        started
+                            .send(task_id)
+                            .expect("blocking waiter observer should remain available");
+                        gate.recv_timeout(TEST_TIMEOUT)
+                            .expect("blocking waiter gate should open");
+                        Ok::<(), io::Error>(())
+                    })
+                    .await
+                    .map(erase_task_handle)
+            })
+        }
+        WaitCompetitionDomain::Cpu => {
+            let WaiterGate::Blocking(gate) = gate else {
+                unreachable!("CPU waiter needs an mpsc gate")
+            };
+            Box::pin(async move {
+                services
+                    .submit_cpu_callable_wait(move || {
+                        let _drop_counter = drop_counter;
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        started
+                            .send(task_id)
+                            .expect("CPU waiter observer should remain available");
+                        gate.recv_timeout(TEST_TIMEOUT).expect("CPU waiter gate should open");
+                        Ok::<(), io::Error>(())
+                    })
+                    .await
+                    .map(erase_task_handle)
+            })
+        }
+        WaitCompetitionDomain::TokioBlocking => {
+            let WaiterGate::Blocking(gate) = gate else {
+                unreachable!("Tokio blocking waiter needs an mpsc gate")
+            };
+            Box::pin(async move {
+                services
+                    .submit_tokio_blocking_callable_wait(move || {
+                        let _drop_counter = drop_counter;
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        started
+                            .send(task_id)
+                            .expect("Tokio blocking waiter observer should remain available");
+                        gate.recv_timeout(TEST_TIMEOUT)
+                            .expect("Tokio blocking waiter gate should open");
+                        Ok::<(), io::Error>(())
+                    })
+                    .await
+                    .map(erase_task_handle)
+            })
+        }
+        WaitCompetitionDomain::Io => {
+            let WaiterGate::Io(gate) = gate else {
+                unreachable!("IO waiter needs a oneshot gate")
+            };
+            Box::pin(async move {
+                services
+                    .spawn_io_wait(async move {
+                        let _drop_counter = drop_counter;
+                        calls.fetch_add(1, Ordering::SeqCst);
+                        started
+                            .send(task_id)
+                            .expect("IO waiter observer should remain available");
+                        gate.await.expect("IO waiter gate should open");
+                        Ok::<(), io::Error>(())
+                    })
+                    .await
+                    .map(erase_task_handle)
+            })
+        }
+    }
+}
+
+fn wait_for_started(rx: &mpsc::Receiver<usize>, expected: usize, domain: WaitCompetitionDomain, scenario: &str) {
+    assert_eq!(
+        rx.recv_timeout(TEST_TIMEOUT)
+            .unwrap_or_else(|error| panic!("{domain:?}/{scenario}: waiter did not start: {error}")),
+        expected,
+        "{domain:?}/{scenario}: the accepted waiter should report its id",
+    );
+}
+
+async fn wait_for_one_waiter(
+    waiters: &mut [ErasedWait<'_>; 2],
+    domain: WaitCompetitionDomain,
+    scenario: &str,
+) -> (usize, ErasedTask) {
+    timeout(TEST_TIMEOUT, async {
+        loop {
+            for (index, waiter) in waiters.iter_mut().enumerate() {
+                if let Poll::Ready(result) = poll_once(waiter.as_mut()).await {
+                    let task = result.unwrap_or_else(|error| {
+                        panic!("{domain:?}/{scenario}: waiter {index} unexpectedly rejected: {error}")
+                    });
+                    return (index, task);
+                }
+            }
+            yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{domain:?}/{scenario}: no waiter acquired capacity before timeout"))
+}
+
+async fn expect_successful_waiter_task(
+    task: ErasedTask,
+    domain: WaitCompetitionDomain,
+    scenario: &str,
+    task_id: usize,
+) {
+    let result = timeout(TEST_TIMEOUT, task)
+        .await
+        .unwrap_or_else(|_| panic!("{domain:?}/{scenario}: accepted waiter {task_id} did not finish"));
+    assert!(
+        result.is_ok(),
+        "{domain:?}/{scenario}: accepted waiter {task_id} should finish successfully: {result:?}",
+    );
+}
+
+async fn wait_for_payload_drop(drops: &AtomicUsize, domain: WaitCompetitionDomain, scenario: &str, task_id: usize) {
+    timeout(TEST_TIMEOUT, async {
+        while drops.load(Ordering::SeqCst) == 0 {
+            yield_now().await;
+        }
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{domain:?}/{scenario}: waiter {task_id} payload was not dropped"));
+}
+
+async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompetitionScenario) {
+    let label = scenario.name();
+    let services = build_competition_services(domain);
+    let mut occupied = occupy_competition_capacity(&services, domain);
+
+    let (started_1_tx, started_1_rx) = mpsc::channel();
+    let (started_2_tx, started_2_rx) = mpsc::channel();
+    let (release_1, gate_1) = waiter_gate(domain);
+    let (release_2, gate_2) = waiter_gate(domain);
+    let calls: [Arc<AtomicUsize>; 2] = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
+    let drops: [Arc<AtomicUsize>; 2] = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
+    let mut waiters = [
+        make_competition_waiter(
+            &services,
+            domain,
+            1,
+            started_1_tx,
+            gate_1,
+            Arc::clone(&calls[0]),
+            Arc::clone(&drops[0]),
+        ),
+        make_competition_waiter(
+            &services,
+            domain,
+            2,
+            started_2_tx,
+            gate_2,
+            Arc::clone(&calls[1]),
+            Arc::clone(&drops[1]),
+        ),
+    ];
+    let mut waiter_releases = [release_1, release_2];
+    let waiter_started = [started_1_rx, started_2_rx];
+
+    for waiter in &mut waiters {
+        assert!(
+            poll_once(waiter.as_mut()).await.is_pending(),
+            "{domain:?}/{label}: both initial waiters should be pending while capacity is full",
+        );
+    }
+    assert_eq!(
+        calls[0].load(Ordering::SeqCst),
+        0,
+        "{domain:?}/{label}: waiter 1 must not run before admission"
+    );
+    assert_eq!(
+        calls[1].load(Ordering::SeqCst),
+        0,
+        "{domain:?}/{label}: waiter 2 must not run before admission"
+    );
+
+    occupied.releases[0].release();
+    if let Some(queued_started) = occupied.queued_started.take() {
+        queued_started
+            .recv_timeout(TEST_TIMEOUT)
+            .unwrap_or_else(|error| panic!("{domain:?}/{label}: queued blocker did not start: {error}"));
+    }
+
+    let (accepted_id, accepted_task) = wait_for_one_waiter(&mut waiters, domain, label).await;
+    let pending_id = 1 - accepted_id;
+    assert!(
+        poll_once(waiters[pending_id].as_mut()).await.is_pending(),
+        "{domain:?}/{label}: the unselected waiter must remain pending after the single capacity release",
+    );
+    assert_eq!(
+        calls[pending_id].load(Ordering::SeqCst),
+        0,
+        "{domain:?}/{label}: the unaccepted waiter must not execute",
+    );
+
+    match scenario {
+        WaitCompetitionScenario::Progress => {
+            for release in &mut occupied.releases {
+                release.release();
+            }
+            wait_for_started(&waiter_started[accepted_id], accepted_id + 1, domain, label);
+            waiter_releases[accepted_id].release();
+            expect_successful_waiter_task(accepted_task, domain, label, accepted_id + 1).await;
+
+            let second_task = timeout(TEST_TIMEOUT, waiters[pending_id].as_mut())
+                .await
+                .unwrap_or_else(|_| panic!("{domain:?}/{label}: remaining waiter did not acquire released capacity"))
+                .unwrap_or_else(|error| panic!("{domain:?}/{label}: remaining waiter was rejected: {error}"));
+            let finished_waiter = std::mem::replace(&mut waiters[pending_id], Box::pin(std::future::pending()));
+            drop(finished_waiter);
+            wait_for_started(&waiter_started[pending_id], pending_id + 1, domain, label);
+            waiter_releases[pending_id].release();
+            expect_successful_waiter_task(second_task, domain, label, pending_id + 1).await;
+        }
+        WaitCompetitionScenario::Shutdown | WaitCompetitionScenario::Stop => {
+            if matches!(scenario, WaitCompetitionScenario::Shutdown) {
+                services.shutdown();
+            } else {
+                let _stop_report = services.stop();
+            }
+
+            let rejected = timeout(TEST_TIMEOUT, waiters[pending_id].as_mut())
+                .await
+                .unwrap_or_else(|_| panic!("{domain:?}/{label}: pending waiter did not wake after close"));
+            assert!(
+                matches!(
+                    rejected,
+                    Err(ExecutionServicesSubmissionError::Rejected {
+                        source: SubmissionError::Shutdown
+                    })
+                ),
+                "{domain:?}/{label}: remaining waiter should be rejected with Shutdown",
+            );
+            let finished_waiter = std::mem::replace(&mut waiters[pending_id], Box::pin(std::future::pending()));
+            drop(finished_waiter);
+            for release in &mut occupied.releases {
+                release.release();
+            }
+            waiter_releases[accepted_id].release();
+            let accepted_result = timeout(TEST_TIMEOUT, accepted_task)
+                .await
+                .unwrap_or_else(|_| panic!("{domain:?}/{label}: accepted task did not reach a terminal result"));
+            if matches!(scenario, WaitCompetitionScenario::Shutdown) {
+                assert!(
+                    accepted_result.is_ok(),
+                    "{domain:?}/{label}: shutdown must let accepted work finish: {accepted_result:?}",
+                );
+            }
+        }
+    }
+
+    if !matches!(scenario, WaitCompetitionScenario::Progress) {
+        for task in occupied.tasks {
+            let result = timeout(TEST_TIMEOUT, task)
+                .await
+                .unwrap_or_else(|_| panic!("{domain:?}/{label}: initial placeholder did not terminate"));
+            if matches!(scenario, WaitCompetitionScenario::Shutdown) {
+                assert!(
+                    result.is_ok(),
+                    "{domain:?}/{label}: shutdown should finish placeholders: {result:?}"
+                );
+            }
+        }
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .unwrap_or_else(|_| panic!("{domain:?}/{label}: services did not terminate"));
+    } else {
+        for task in occupied.tasks {
+            timeout(TEST_TIMEOUT, task)
+                .await
+                .unwrap_or_else(|_| panic!("{domain:?}/{label}: initial placeholder did not terminate"))
+                .unwrap_or_else(|error| panic!("{domain:?}/{label}: initial placeholder failed: {error:?}"));
+        }
+        services.shutdown();
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .unwrap_or_else(|_| panic!("{domain:?}/{label}: services did not terminate"));
+    }
+
+    if !matches!(scenario, WaitCompetitionScenario::Progress) {
+        assert_eq!(
+            calls[pending_id].load(Ordering::SeqCst),
+            0,
+            "{domain:?}/{label}: rejected waiter must never execute",
+        );
+    }
+    match scenario {
+        WaitCompetitionScenario::Progress | WaitCompetitionScenario::Shutdown => {
+            assert_eq!(
+                calls[accepted_id].load(Ordering::SeqCst),
+                1,
+                "{domain:?}/{label}: each accepted task must execute once",
+            );
+            if matches!(scenario, WaitCompetitionScenario::Progress) {
+                assert_eq!(
+                    calls[pending_id].load(Ordering::SeqCst),
+                    1,
+                    "{domain:?}/{label}: the second task must execute once after capacity returns",
+                );
+            }
+        }
+        WaitCompetitionScenario::Stop => assert!(
+            calls[accepted_id].load(Ordering::SeqCst) <= 1,
+            "{domain:?}/{label}: stop must not execute accepted work more than once",
+        ),
+    }
+    for (index, drop_count) in drops.iter().enumerate() {
+        wait_for_payload_drop(drop_count, domain, label, index + 1).await;
+        assert_eq!(
+            drop_count.load(Ordering::SeqCst),
+            1,
+            "{domain:?}/{label}: waiter {} payload drops once (accepted={accepted_id}, rejected/pending={pending_id})",
+            index + 1,
+        );
+    }
+}
+
 impl Future for PollCounterFuture {
     type Output = Result<usize, io::Error>;
 
     fn poll(self: Pin<&mut Self>, _context: &mut std::task::Context<'_>) -> Poll<Self::Output> {
         self.polls.fetch_add(1, Ordering::SeqCst);
         Poll::Ready(Ok(42))
+    }
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_wait_competition_progress_across_domains() {
+    for domain in WaitCompetitionDomain::all() {
+        run_wait_competition(domain, WaitCompetitionScenario::Progress).await;
+    }
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_wait_competition_shutdown_across_domains() {
+    for domain in WaitCompetitionDomain::all() {
+        run_wait_competition(domain, WaitCompetitionScenario::Shutdown).await;
+    }
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_wait_competition_stop_across_domains() {
+    for domain in WaitCompetitionDomain::all() {
+        run_wait_competition(domain, WaitCompetitionScenario::Stop).await;
     }
 }
 
