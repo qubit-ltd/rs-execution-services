@@ -79,7 +79,7 @@ IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取�
 
 集成测试通过公共 API 检查错误优先级、四域容量等待、多个等待者竞争、丢弃未接收任务、关闭唤醒以及同域嵌套等待。测试会固定已 pin 的 future，在独立 gate 仍占用容量时显式 poll 一次并断言 `Pending`；timeout 只用于发现测试卡死。
 
-应用 consumer 和可运行资源预算示例也会在释放已接收任务前 poll 等待 future。文档 consumer 检查公开依赖和 Tokio feature 的最小安装路径。独立 IoC CI job 会使用固定依赖运行 consumer、测试和 Clippy，不混入核心 crate 的 feature matrix。
+应用 consumer 和可运行资源预算示例也会在释放已接收任务前 poll 等待 future。本地文档 consumer 检查 sibling checkout 布局和 Tokio feature；它会解析本仓库 `.cargo/config.toml` 中的 patch，因此不属于 registry 隔离验证。`packaged-documentation-consumer` workflow 另行运行 `cargo package --locked`，把归档解压到源码树外，再在不加载源码树 Cargo 配置的目录中构建并运行消费者。metadata 会拒绝除解压后的目标包和临时消费者之外的本地路径依赖，因此传递依赖必须从 registry 解析。该检查验证文档所用 feature 配置与 Cargo 当前可解析的 registry 版本兼容；它不证明最小 semver 兼容性，也不代表生产项目已经采用。独立 IoC CI job 会使用固定依赖运行 consumer、测试和 Clippy，不混入核心 crate 的 feature matrix。
 
 中英文用户指南描述相同的错误、所有权、取消和容量契约。可运行示例与 Cargo 打包文件清单验证文档代码可执行且设计文档进入 crate 发布包。
 

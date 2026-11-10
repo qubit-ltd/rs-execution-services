@@ -1,0 +1,40 @@
+name: Packaged documentation consumers
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  packaged-consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: rs-execution-services
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-executor
+          ref: 96c6006e5f6e5d59959695893d7f4e8697d21a54
+          path: rs-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-rayon-executor
+          ref: 2caaa944acf2fb4dab977200b517ba1f59a759ce
+          path: rs-rayon-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-tokio-executor
+          ref: ca18599285e372da3f0074aba69e687ecc3af4a0
+          path: rs-tokio-executor
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - name: Check extracted package consumers
+        run: python3 .infra/tools/check-packaged-documentation-consumer.py
+        working-directory: rs-execution-services
