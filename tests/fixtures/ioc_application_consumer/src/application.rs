@@ -133,42 +133,72 @@ fn register_file_system(builder: &mut ContainerBuilder, root: PathBuf) -> Result
 #[cfg(test)]
 mod tests {
     use std::io;
+    use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::sync::atomic::Ordering;
 
     use qubit_fs_registry::FileSystemRegistry;
     use qubit_ioc::BuildError;
     use qubit_ioc::ContainerBuilder;
     use qubit_ioc::Dependency;
     use qubit_ioc::FactoryError;
+    use qubit_ioc::Managed;
+    use qubit_ioc::WaitPolicy;
 
     use super::register_file_system;
 
-    /// An invalid root must stop construction before the report is written.
+    /// An invalid graph must stop construction before the selected factory is
+    /// invoked.
     #[test]
-    fn test_invalid_graph_does_not_create_report() {
+    fn test_invalid_graph_does_not_invoke_selected_factory() {
         struct Missing;
         let root = tempfile::tempdir().expect("temporary root");
         let mut builder = ContainerBuilder::new();
         register_file_system(&mut builder, root.path().to_path_buf()).expect("register factory");
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = Arc::clone(&calls);
+        builder
+            .register_factory::<u16, _>(&[], move |_| {
+                observed.fetch_add(1, Ordering::SeqCst);
+                Ok(Arc::new(1_u16))
+            })
+            .expect("register observed factory");
         builder.root::<FileSystemRegistry>();
+        builder.root::<u16>();
         builder.root::<Missing>();
         let failure = match builder.build() {
             Ok(_) => panic!("missing root must fail before factories"),
             Err(failure) => failure,
         };
         assert!(matches!(failure.cause(), BuildError::MissingRoot { .. }));
-        assert!(!root.path().join("report.csv").exists());
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
     }
 
-    /// A later factory failure must not leave a report behind.
+    /// A later factory failure must roll back an already constructed managed
+    /// dependency once.
     #[tokio::test]
-    async fn test_later_factory_failure_does_not_create_report() {
+    async fn test_later_factory_failure_rolls_back_managed_dependency() {
         let root = tempfile::tempdir().expect("temporary root");
-        let mut builder = ContainerBuilder::new();
+        let created = Arc::new(AtomicUsize::new(0));
+        let stopped = Arc::new(AtomicUsize::new(0));
+        let create_count = Arc::clone(&created);
+        let stop_count = Arc::clone(&stopped);
+        let mut builder = ContainerBuilder::new().wait_policy(WaitPolicy::unbounded());
         register_file_system(&mut builder, root.path().to_path_buf()).expect("register filesystem");
         builder
-            .register_factory::<u8, _>(&[Dependency::of::<FileSystemRegistry>()], |_| {
-                Err(FactoryError::new(io::Error::other("expected failure")))
+            .register_managed_factory::<u16, _>(&[], move |_| {
+                create_count.fetch_add(1, Ordering::SeqCst);
+                Ok(Managed::synchronous(Arc::new(1_u16), move |_| {
+                    stop_count.fetch_add(1, Ordering::SeqCst);
+                    Ok(())
+                }))
             })
+            .expect("register managed dependency");
+        builder
+            .register_factory::<u8, _>(
+                &[Dependency::of::<FileSystemRegistry>(), Dependency::of::<u16>()],
+                |_| Err(FactoryError::new(io::Error::other("expected failure"))),
+            )
             .expect("register failing factory");
         builder.root::<u8>();
 
@@ -177,6 +207,10 @@ mod tests {
             Err(failure) => failure,
         };
         assert!(matches!(failure.cause(), BuildError::FactoryFailed { .. }));
-        assert!(!root.path().join("report.csv").exists());
+        assert_eq!(created.load(Ordering::SeqCst), 1);
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
+        assert!(failure.cleanup_report().expect("managed rollback report").is_success());
+        drop(failure);
+        assert_eq!(stopped.load(Ordering::SeqCst), 1);
     }
 }
