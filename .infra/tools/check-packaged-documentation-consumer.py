@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build documented consumers against an extracted package without path patches."""
+"""Build archived documentation consumers with allowlisted executor path dependencies."""
 
 from __future__ import annotations
 
@@ -57,17 +57,40 @@ def check_local_patch_configs(cwd: Path) -> list[Path]:
     return [path for path in candidates if path.is_file()]
 
 
-def check_metadata(metadata: dict, consumer_manifest: Path, package_manifest: Path) -> None:
+def check_metadata(
+    metadata: dict,
+    consumer_manifest: Path,
+    package_manifest: Path,
+    path_dependency_manifests: dict[str, Path],
+) -> None:
     allowed_manifests = {consumer_manifest.resolve(), package_manifest.resolve()}
+    expected_path_manifests = {
+        manifest.resolve(): name for name, manifest in path_dependency_manifests.items()
+    }
+    resolved_path_dependencies: set[str] = set()
     unexpected = []
     for package in metadata.get("packages", []):
         source = package.get("source")
         manifest = Path(package["manifest_path"]).resolve()
         if source is None:
-            if manifest not in allowed_manifests:
+            expected_name = expected_path_manifests.get(manifest)
+            if manifest in allowed_manifests:
+                continue
+            if expected_name is None:
                 unexpected.append(f"{package['name']} at {manifest}")
+            elif package.get("name") != expected_name:
+                unexpected.append(
+                    f"{package['name']} at {manifest} (expected {expected_name})"
+                )
+            else:
+                resolved_path_dependencies.add(expected_name)
         elif not isinstance(source, str) or not source.startswith("registry+"):
             unexpected.append(f"{package['name']} from {source!r} at {manifest}")
+    missing_path_dependencies = set(path_dependency_manifests) - resolved_path_dependencies
+    if missing_path_dependencies:
+        unexpected.append(
+            "missing expected path dependencies: " + ", ".join(sorted(missing_path_dependencies))
+        )
     if unexpected:
         raise RuntimeError(
             "consumer resolved non-registry sources or unexpected local packages: "
@@ -101,13 +124,34 @@ def self_test() -> None:
         return {"packages": list(packages)}
 
     allowed_local = [entry("consumer", None, consumer), entry(PACKAGE_NAME, None, package)]
+    latest_path_dependencies = [
+        entry("qubit-tokio-executor", None, Path("/tmp/rs-tokio-executor/Cargo.toml")),
+        entry("qubit-rayon-executor", None, Path("/tmp/rs-rayon-executor/Cargo.toml")),
+        entry("qubit-executor", None, Path("/tmp/rs-executor/Cargo.toml")),
+    ]
+    local_dependency_manifests = {
+        package["name"]: Path(package["manifest_path"])
+        for package in latest_path_dependencies
+    }
+    try:
+        check_metadata(
+            metadata(*allowed_local, *latest_path_dependencies),
+            consumer,
+            package,
+            local_dependency_manifests,
+        )
+    except RuntimeError as error:
+        raise RuntimeError("self-test failed to allow the latest Tokio executor path dependencies") from error
+
     check_metadata(
         metadata(
             *allowed_local,
+            *latest_path_dependencies,
             entry("registry-dependency", "registry+https://example.test/index", Path("/tmp/registry/Cargo.toml")),
         ),
         consumer,
         package,
+        local_dependency_manifests,
     )
 
     rejected = (
@@ -118,26 +162,55 @@ def self_test() -> None:
     )
     for name, source, manifest in rejected:
         try:
-            check_metadata(metadata(*allowed_local, entry(name, source, manifest)), consumer, package)
+            check_metadata(
+                metadata(*allowed_local, *latest_path_dependencies, entry(name, source, manifest)),
+                consumer,
+                package,
+                local_dependency_manifests,
+            )
         except RuntimeError as error:
             if name not in str(error) and repr(source) not in str(error):
                 raise RuntimeError(f"self-test rejection omitted package/source: {error}") from error
         else:
             raise RuntimeError(f"self-test failed to reject {name} from {source!r}")
 
+    wrong_local_path = metadata(
+        *allowed_local,
+        *latest_path_dependencies,
+        entry("qubit-tokio-executor", None, Path("/tmp/alternate/Cargo.toml")),
+    )
+    try:
+        check_metadata(wrong_local_path, consumer, package, local_dependency_manifests)
+    except RuntimeError as error:
+        if "alternate" not in str(error):
+            raise
+    else:
+        raise RuntimeError("self-test accepted a Tokio executor from an unapproved local path")
+
+    missing_local_path = metadata(*allowed_local, latest_path_dependencies[0])
+    try:
+        check_metadata(missing_local_path, consumer, package, local_dependency_manifests)
+    except RuntimeError as error:
+        if "qubit-executor" not in str(error):
+            raise
+    else:
+        raise RuntimeError("self-test accepted metadata missing the expected qubit-executor path")
+
     for invalid_target in (
-        metadata(entry("consumer", None, consumer)),
+        metadata(entry("consumer", None, consumer), *latest_path_dependencies),
         metadata(
             entry("consumer", None, consumer),
             entry(PACKAGE_NAME, "registry+https://example.test/index", package),
+            *latest_path_dependencies,
         ),
         metadata(
             entry("consumer", None, consumer),
             entry(PACKAGE_NAME, "git+https://example.test/repo#abc", package),
+            *latest_path_dependencies,
         ),
     ):
         try:
-            check_metadata(invalid_target, consumer, package)
+            check_metadata(invalid_target, consumer, package, local_dependency_manifests)
         except RuntimeError as error:
             if PACKAGE_NAME not in str(error) and "target" not in str(error) and "extracted package" not in str(error):
                 raise
@@ -189,7 +262,13 @@ def consumer_program(package_dir: Path, program: str) -> str:
         raise RuntimeError(f"cannot read packaged example {source}: {error}") from error
 
 
-def consumer_manifest(name: str, package_path: Path, package_version: str, tokio_features: list[str]) -> str:
+def consumer_manifest(
+    name: str,
+    package_path: Path,
+    package_version: str,
+    tokio_features: list[str],
+    tokio_executor_path: Path,
+) -> str:
     features = ", ".join(json.dumps(feature) for feature in tokio_features)
     version_parts = package_version.split(".")
     if len(version_parts) < 2:
@@ -205,11 +284,39 @@ publish = false
 {PACKAGE_NAME} = {{ path = {json.dumps(str(package_path))}, version = {json.dumps(version_requirement)} }}
 tokio = {{ version = "^1.54", features = [{features}] }}
 
+[patch.crates-io]
+qubit-tokio-executor = {{ path = {json.dumps(str(tokio_executor_path))} }}
+qubit-rayon-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-rayon-executor"))} }}
+qubit-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-executor"))} }}
+
 [workspace]
 '''
 
 
+def local_path_dependency_manifests(project: Path) -> dict[str, Path]:
+    workspace_root = Path(os.environ.get("QUBIT_WORKSPACE_ROOT", project.parent)).resolve()
+    manifests = {
+        "qubit-tokio-executor": workspace_root / "rs-tokio-executor" / "Cargo.toml",
+        "qubit-rayon-executor": workspace_root / "rs-rayon-executor" / "Cargo.toml",
+        "qubit-executor": workspace_root / "rs-executor" / "Cargo.toml",
+    }
+    for expected_name, manifest in manifests.items():
+        if not manifest.is_file():
+            raise RuntimeError(f"required latest path dependency manifest is missing: {manifest}")
+        try:
+            actual_name = tomllib.loads(manifest.read_text())["package"]["name"]
+        except (OSError, KeyError, tomllib.TOMLDecodeError) as error:
+            raise RuntimeError(f"cannot inspect path dependency manifest {manifest}: {error}") from error
+        if actual_name != expected_name:
+            raise RuntimeError(
+                f"path dependency manifest {manifest} declares {actual_name!r}, expected {expected_name!r}"
+            )
+    return manifests
+
+
 def build_consumers(project: Path) -> None:
+    local_manifests = local_path_dependency_manifests(project)
+    tokio_executor_path = local_manifests["qubit-tokio-executor"].parent.resolve()
     cargo_version = run(["cargo", "--version"], project).strip()
     package_version = json.loads(
         run(["cargo", "metadata", "--no-deps", "--format-version", "1"], project, show_stdout=False)
@@ -245,7 +352,15 @@ def build_consumers(project: Path) -> None:
             consumer = work / name
             consumer.mkdir()
             manifest = consumer / "Cargo.toml"
-            manifest.write_text(consumer_manifest(name.replace("-", "_"), package_dir, package_version, features))
+            manifest.write_text(
+                consumer_manifest(
+                    name.replace("-", "_"),
+                    package_dir,
+                    package_version,
+                    features,
+                    tokio_executor_path,
+                )
+            )
             source = consumer_program(package_dir, program)
             (consumer / "src").mkdir()
             (consumer / "src" / "main.rs").write_text(source)
@@ -268,7 +383,7 @@ def build_consumers(project: Path) -> None:
                 consumer,
                 show_stdout=False,
             )
-            check_metadata(json.loads(metadata_output), manifest, package_manifest)
+            check_metadata(json.loads(metadata_output), manifest, package_manifest, local_manifests)
             run(["cargo", "run", "--locked", "--manifest-path", str(manifest)], consumer)
 
 
