@@ -61,13 +61,16 @@ def check_metadata(metadata: dict, consumer_manifest: Path, package_manifest: Pa
     allowed_manifests = {consumer_manifest.resolve(), package_manifest.resolve()}
     unexpected = []
     for package in metadata.get("packages", []):
-        if package.get("source") is None:
-            manifest = Path(package["manifest_path"]).resolve()
+        source = package.get("source")
+        manifest = Path(package["manifest_path"]).resolve()
+        if source is None:
             if manifest not in allowed_manifests:
                 unexpected.append(f"{package['name']} at {manifest}")
+        elif not isinstance(source, str) or not source.startswith("registry+"):
+            unexpected.append(f"{package['name']} from {source!r} at {manifest}")
     if unexpected:
         raise RuntimeError(
-            "consumer resolved local path dependencies other than itself and the extracted package: "
+            "consumer resolved non-registry sources or unexpected local packages: "
             + "; ".join(unexpected)
         )
     target = next(
@@ -75,32 +78,115 @@ def check_metadata(metadata: dict, consumer_manifest: Path, package_manifest: Pa
             package
             for package in metadata.get("packages", [])
             if package.get("name") == PACKAGE_NAME
+            and package.get("source") is None
             and Path(package["manifest_path"]).resolve() == package_manifest.resolve()
         ),
         None,
     )
     if target is None:
-        raise RuntimeError("consumer metadata did not resolve the extracted package")
+        raise RuntimeError(
+            f"consumer metadata did not resolve {PACKAGE_NAME} from the extracted package "
+            "with source=None and its exact manifest path"
+        )
 
 
 def self_test() -> None:
     consumer = Path("/tmp/consumer/Cargo.toml")
     package = Path("/tmp/package/Cargo.toml")
-    metadata = {
-        "packages": [
-            {"name": "consumer", "source": None, "manifest_path": str(consumer)},
-            {"name": PACKAGE_NAME, "source": None, "manifest_path": str(package)},
-            {"name": "injected-local-patch", "source": None, "manifest_path": "/tmp/sibling/Cargo.toml"},
-        ]
+
+    def entry(name: str, source: object, manifest: Path) -> dict:
+        return {"name": name, "source": source, "manifest_path": str(manifest)}
+
+    def metadata(*packages: dict) -> dict:
+        return {"packages": list(packages)}
+
+    allowed_local = [entry("consumer", None, consumer), entry(PACKAGE_NAME, None, package)]
+    check_metadata(
+        metadata(
+            *allowed_local,
+            entry("registry-dependency", "registry+https://example.test/index", Path("/tmp/registry/Cargo.toml")),
+        ),
+        consumer,
+        package,
+    )
+
+    rejected = (
+        ("injected-local-patch", None, Path("/tmp/sibling/Cargo.toml")),
+        ("git-override", "git+https://example.test/repo#abc", Path("/tmp/git/Cargo.toml")),
+        ("unknown-source", "mystery+opaque", Path("/tmp/unknown/Cargo.toml")),
+        ("invalid-source-type", 42, Path("/tmp/invalid/Cargo.toml")),
+    )
+    for name, source, manifest in rejected:
+        try:
+            check_metadata(metadata(*allowed_local, entry(name, source, manifest)), consumer, package)
+        except RuntimeError as error:
+            if name not in str(error) and repr(source) not in str(error):
+                raise RuntimeError(f"self-test rejection omitted package/source: {error}") from error
+        else:
+            raise RuntimeError(f"self-test failed to reject {name} from {source!r}")
+
+    for invalid_target in (
+        metadata(entry("consumer", None, consumer)),
+        metadata(
+            entry("consumer", None, consumer),
+            entry(PACKAGE_NAME, "registry+https://example.test/index", package),
+        ),
+        metadata(
+            entry("consumer", None, consumer),
+            entry(PACKAGE_NAME, "git+https://example.test/repo#abc", package),
+        ),
+    ):
+        try:
+            check_metadata(invalid_target, consumer, package)
+        except RuntimeError as error:
+            if PACKAGE_NAME not in str(error) and "target" not in str(error) and "extracted package" not in str(error):
+                raise
+        else:
+            raise RuntimeError("self-test failed to reject missing or sourced target package")
+
+    with tempfile.TemporaryDirectory(prefix="packaged-consumer-self-test-") as temporary:
+        package_dir = Path(temporary)
+        examples = package_dir / "examples"
+        examples.mkdir()
+        quick_start = "fn main() { println!(\"quick-start archive marker\"); }\n"
+        daily_report = "fn main() { println!(\"daily-report archive marker\"); }\n"
+        (examples / "quick_start.rs").write_text(quick_start)
+        (examples / "daily_report.rs").write_text(daily_report)
+        if consumer_program(package_dir, "quick-start") != quick_start:
+            raise RuntimeError("self-test selected the wrong quick-start archive example")
+        if consumer_program(package_dir, "documentation") != daily_report:
+            raise RuntimeError("self-test selected the wrong daily-report archive example")
+        try:
+            consumer_program(package_dir, "unknown")
+        except RuntimeError as error:
+            if "unknown" not in str(error):
+                raise
+        else:
+            raise RuntimeError("self-test accepted an unknown consumer program")
+        (examples / "daily_report.rs").unlink()
+        try:
+            consumer_program(package_dir, "documentation")
+        except RuntimeError as error:
+            if "daily_report.rs" not in str(error):
+                raise
+        else:
+            raise RuntimeError("self-test accepted a missing packaged daily-report example")
+
+    print("metadata source matrix and packaged program self-tests passed")
+
+
+def consumer_program(package_dir: Path, program: str) -> str:
+    paths = {
+        "quick-start": "examples/quick_start.rs",
+        "documentation": "examples/daily_report.rs",
     }
+    if program not in paths:
+        raise RuntimeError(f"unknown consumer program: {program}")
+    source = package_dir / paths[program]
     try:
-        check_metadata(metadata, consumer, package)
-    except RuntimeError as error:
-        if "injected-local-patch" not in str(error):
-            raise
-    else:
-        raise RuntimeError("self-test failed to reject an injected local path patch")
-    print("local path-patch rejection self-test passed")
+        return source.read_text()
+    except OSError as error:
+        raise RuntimeError(f"cannot read packaged example {source}: {error}") from error
 
 
 def consumer_manifest(name: str, package_path: Path, package_version: str, tokio_features: list[str]) -> str:
@@ -155,26 +241,34 @@ def build_consumers(project: Path) -> None:
         package_manifest = package_dir / "Cargo.toml"
         if not package_manifest.is_file():
             raise RuntimeError(f"package archive is missing {package_manifest.name}")
-        quick_start = (project / "examples" / "quick_start.rs").read_text()
-        documentation = (project / "tests" / "fixtures" / "documentation_consumer" / "src" / "main.rs").read_text()
-
         for name, features, program in CONSUMERS:
             consumer = work / name
             consumer.mkdir()
             manifest = consumer / "Cargo.toml"
             manifest.write_text(consumer_manifest(name.replace("-", "_"), package_dir, package_version, features))
-            source = quick_start if program == "quick-start" else documentation
+            source = consumer_program(package_dir, program)
             (consumer / "src").mkdir()
             (consumer / "src" / "main.rs").write_text(source)
 
-            metadata_output = run(
+            run(
                 ["cargo", "metadata", "--format-version", "1", "--manifest-path", str(manifest)],
                 consumer,
                 show_stdout=False,
             )
-            metadata = json.loads(metadata_output)
-            check_metadata(metadata, manifest, package_manifest)
-            run(["cargo", "generate-lockfile", "--manifest-path", str(manifest)], consumer)
+            metadata_output = run(
+                [
+                    "cargo",
+                    "metadata",
+                    "--locked",
+                    "--format-version",
+                    "1",
+                    "--manifest-path",
+                    str(manifest),
+                ],
+                consumer,
+                show_stdout=False,
+            )
+            check_metadata(json.loads(metadata_output), manifest, package_manifest)
             run(["cargo", "run", "--locked", "--manifest-path", str(manifest)], consumer)
 
 
