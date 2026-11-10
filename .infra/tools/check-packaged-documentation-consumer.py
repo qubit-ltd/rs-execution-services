@@ -140,6 +140,86 @@ def check_metadata(
             )
 
 
+CRATES_IO_SOURCE = "registry+https://github.com/rust-lang/crates.io-index"
+RAYON_CRATE = "qubit-rayon-executor"
+
+
+def _exact_version(value: str) -> tuple[int, int, int]:
+    parts = value.split(".")
+    if len(parts) != 3 or any(
+        not part.isdigit() or (len(part) > 1 and part.startswith("0"))
+        for part in parts
+    ):
+        raise RuntimeError(f"Rayon version must be an exact x.y.z version: {value!r}")
+    return tuple(map(int, parts))
+
+
+def _rayon_lower_bound(package_manifest: Path) -> str:
+    try:
+        parsed = tomllib.loads(package_manifest.read_text())
+        requirement = parsed["dependencies"][RAYON_CRATE]["version"]
+    except (OSError, KeyError, TypeError, tomllib.TOMLDecodeError) as error:
+        raise RuntimeError(
+            f"cannot read {RAYON_CRATE} dependency from {package_manifest}: {error}"
+        ) from error
+    if not isinstance(requirement, str) or not requirement.startswith("^"):
+        raise RuntimeError(
+            f"{RAYON_CRATE} dependency must declare a caret lower bound, got {requirement!r}"
+        )
+    lower = requirement[1:]
+    parts = lower.split(".")
+    if len(parts) == 2:
+        lower += ".0"
+    _exact_version(lower)
+    return lower
+
+
+def check_rayon_resolution(
+    metadata: dict,
+    package_manifest: Path,
+    rayon_version: str,
+    registry_only: bool,
+) -> None:
+    if not registry_only:
+        raise RuntimeError("--rayon-version is only valid with --registry-only")
+    _exact_version(rayon_version)
+    lower_bound = _rayon_lower_bound(package_manifest)
+    if rayon_version != lower_bound:
+        raise RuntimeError(
+            f"Rayon pin {rayon_version} does not match facade manifest lower bound {lower_bound}"
+        )
+    packages = metadata.get("packages", [])
+    targets = [
+        item for item in packages
+        if item.get("name") == PACKAGE_NAME
+        and item.get("source") is None
+        and Path(item.get("manifest_path", "")).resolve() == package_manifest.resolve()
+    ]
+    if len(targets) != 1 or not targets[0].get("id"):
+        raise RuntimeError("metadata lacks the extracted facade package ID")
+    target = targets[0]
+    rayon_packages = [item for item in packages if item.get("name") == RAYON_CRATE]
+    exact_packages = [item for item in rayon_packages if item.get("version") == rayon_version]
+    if len(exact_packages) != 1:
+        raise RuntimeError(
+            f"metadata must contain exactly one {RAYON_CRATE} {rayon_version} package; "
+            f"found {[item.get('version') for item in rayon_packages]}"
+        )
+    rayon = exact_packages[0]
+    if rayon.get("source") != CRATES_IO_SOURCE or not rayon.get("id"):
+        raise RuntimeError(f"{RAYON_CRATE} {rayon_version} is not from the crates.io registry")
+    nodes = metadata.get("resolve", {}).get("nodes", [])
+    facade_nodes = [node for node in nodes if node.get("id") == target["id"]]
+    if len(facade_nodes) != 1:
+        raise RuntimeError("metadata resolve graph lacks a unique facade node")
+    rayon_edges = [
+        dep for dep in facade_nodes[0].get("deps", [])
+        if dep.get("name") == "qubit_rayon_executor"
+    ]
+    if len(rayon_edges) != 1 or rayon_edges[0].get("pkg") != rayon["id"]:
+        raise RuntimeError(
+            f"facade dependency edge does not resolve to {RAYON_CRATE} {rayon_version}"
+        )
 def self_test() -> None:
     consumer = Path("/tmp/consumer/Cargo.toml")
     package = Path("/tmp/package/Cargo.toml")
@@ -168,6 +248,64 @@ def self_test() -> None:
         registry_graph, consumer, package, {},
         consumer_package_name="consumer", registry_only=True,
     )
+    with tempfile.TemporaryDirectory(prefix="rayon-resolution-self-test-") as temporary:
+        root = Path(temporary)
+        archive = root / "archive"
+        archive.mkdir()
+        archive_manifest = archive / "Cargo.toml"
+        archive_manifest.write_text(
+            '[package]\nname="qubit-execution-services"\nversion="0.10.4"\n'
+            '[dependencies]\nqubit-rayon-executor={version="^0.9"}\n'
+        )
+        facade_id = "qubit-execution-services 0.10.4 (path+file:///tmp/package)"
+        rayon_090_id = "qubit-rayon-executor 0.9.0 (registry+https://github.com/rust-lang/crates.io-index)"
+        rayon_091_id = "qubit-rayon-executor 0.9.1 (registry+https://github.com/rust-lang/crates.io-index)"
+
+        def rayon_meta(
+            version_id: str,
+            versions: tuple[str, ...] = ("0.9.0",),
+            edge_id: str | None = None,
+        ) -> dict:
+            rayon_packages = [
+                {"name": RAYON_CRATE, "version": version, "id": version_id if version == "0.9.0" else rayon_091_id,
+                 "source": CRATES_IO_SOURCE, "manifest_path": f"/tmp/registry/rayon-{version}/Cargo.toml"}
+                for version in versions
+            ]
+            return {
+                "packages": [
+                    {"name": PACKAGE_NAME, "version": "0.10.4", "id": facade_id,
+                     "source": None, "manifest_path": str(archive_manifest)},
+                    *rayon_packages,
+                ],
+                "resolve": {"nodes": [{"id": facade_id, "deps": [
+                    {"name": "qubit_rayon_executor", "pkg": edge_id or version_id}
+                ]}]},
+            }
+
+        rejected_rayon_cases = (
+            (rayon_meta(rayon_090_id, ("0.9.0", "0.9.1"), edge_id=rayon_091_id), "0.9.0", True,
+             "accepted a mismatched facade dependency edge"),
+            (rayon_meta(rayon_091_id, ("0.9.1",)), "0.9.0", True,
+             "accepted a same-name package with only a different version"),
+            (rayon_meta(rayon_090_id), "1.0.0", True,
+             "accepted a pin outside the facade caret requirement"),
+            (rayon_meta(rayon_090_id), "^0.9.0", True,
+             "accepted a range instead of an exact pin"),
+            (rayon_meta(rayon_090_id), "", True,
+             "accepted an empty Rayon pin"),
+            (rayon_meta(rayon_090_id), "00.9.0", True,
+             "accepted a non-canonical Rayon version"),
+            (rayon_meta(rayon_090_id), "0.9.0", False,
+             "accepted a Rayon pin in non-registry mode"),
+        )
+        for graph, pin, registry, message in rejected_rayon_cases:
+            try:
+                check_rayon_resolution(graph, archive_manifest, pin, registry_only=registry)
+            except RuntimeError:
+                pass
+            else:
+                raise RuntimeError(f"registry verifier {message}")
+        check_rayon_resolution(rayon_meta(rayon_090_id), archive_manifest, "0.9.0", registry_only=True)
     try:
         check_metadata(
             metadata(*allowed_local, entry("alternate-registry", "registry+https://example.test/index", Path("/tmp/registry/other/Cargo.toml"))),
@@ -195,6 +333,15 @@ def self_test() -> None:
         or 'version = "^1.53"' not in strict_manifest
     ):
         raise RuntimeError("registry-only consumer manifest did not preserve strict dependency constraints")
+    pinned_manifest = consumer_manifest(
+        "pinned_consumer", package.parent, "0.10.4", ["rt"], None,
+        registry_only=True, rayon_version="0.9.0",
+    )
+    if (
+        'qubit-rayon-executor = { version = "=0.9.0", features = ["async-wait"] }'
+        not in pinned_manifest
+    ):
+        raise RuntimeError("registry-only consumer manifest did not exact-pin Rayon with async-wait")
     try:
         check_metadata(
             metadata(entry("renamed_consumer", None, consumer), entry(PACKAGE_NAME, None, package)),
@@ -422,13 +569,24 @@ def consumer_manifest(
     tokio_features: list[str],
     tokio_executor_path: Path | None,
     registry_only: bool = False,
+    rayon_version: str | None = None,
 ) -> str:
+    if rayon_version is not None:
+        if not registry_only:
+            raise RuntimeError("--rayon-version is only valid with --registry-only")
+        _exact_version(rayon_version)
     features = ", ".join(json.dumps(feature) for feature in tokio_features)
     version_parts = package_version.split(".")
     if len(version_parts) < 2:
         raise RuntimeError(f"invalid package version: {package_version}")
     version_requirement = f"^{version_parts[0]}.{version_parts[1]}"
     patches = ""
+    rayon_pin = ""
+    if rayon_version is not None:
+        rayon_pin = (
+            f'{RAYON_CRATE} = {{ version = "={rayon_version}", '
+            'features = ["async-wait"] }\n'
+        )
     if not registry_only:
         if tokio_executor_path is None:
             raise RuntimeError("source consumer requires a Tokio executor path")
@@ -444,7 +602,7 @@ publish = false
 
 [dependencies]
 {PACKAGE_NAME} = {{ path = {json.dumps(str(package_path))}, version = {json.dumps(version_requirement)} }}
-tokio = {{ version = "^1.53", features = [{features}] }}
+{rayon_pin}tokio = {{ version = "^1.53", features = [{features}] }}
 
 {patches}
 
@@ -565,7 +723,13 @@ def local_path_dependency_manifests(project: Path) -> dict[str, Path]:
     return manifests
 
 
-def build_consumers(project: Path, registry_only: bool = False) -> None:
+def build_consumers(
+    project: Path,
+    registry_only: bool = False,
+    rayon_version: str | None = None,
+) -> None:
+    if rayon_version is not None and not registry_only:
+        raise RuntimeError("--rayon-version is only valid with --registry-only")
     local_manifests = {} if registry_only else local_path_dependency_manifests(project)
     tokio_executor_path = (
         None if registry_only else local_manifests["qubit-tokio-executor"].parent.resolve()
@@ -622,6 +786,7 @@ def build_consumers(project: Path, registry_only: bool = False) -> None:
                     features,
                     tokio_executor_path,
                     registry_only=registry_only,
+                    rayon_version=rayon_version,
                 )
             )
             source = consumer_program(package_dir, program)
@@ -666,6 +831,13 @@ def build_consumers(project: Path, registry_only: bool = False) -> None:
                 consumer_package_name=name.replace("-", "_"),
                 registry_only=registry_only,
             )
+            if rayon_version is not None:
+                check_rayon_resolution(
+                    resolved_metadata,
+                    package_manifest,
+                    rayon_version,
+                    registry_only=registry_only,
+                )
             checked_sources = sorted(
                 f"{package['name']}={package['source']}"
                 for package in resolved_metadata["packages"]
@@ -679,16 +851,38 @@ def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         self_test()
         return 0
-    if len(sys.argv) == 2 and sys.argv[1] == "--registry-only":
-        registry_only = True
-    elif len(sys.argv) == 1:
-        registry_only = False
+    args = sys.argv[1:]
+    registry_only = "--registry-only" in args
+    rayon_version = None
+    if "--rayon-version" in args:
+        index = args.index("--rayon-version")
+        if index + 1 >= len(args):
+            rayon_version = ""
+        else:
+            rayon_version = args[index + 1]
+        del args[index:index + 2]
+    if args == ["--registry-only"]:
+        pass
+    elif args == [] and rayon_version is None:
+        pass
     else:
-        print(f"usage: {Path(sys.argv[0]).name} [--self-test | --registry-only]", file=sys.stderr)
+        print(
+            f"usage: {Path(sys.argv[0]).name} [--self-test | --registry-only [--rayon-version x.y.z]]",
+            file=sys.stderr,
+        )
         return 2
+    if rayon_version is not None:
+        if not registry_only:
+            print("error: --rayon-version is only valid with --registry-only", file=sys.stderr)
+            return 2
+        try:
+            _exact_version(rayon_version)
+        except RuntimeError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 2
     project = Path(__file__).resolve().parents[2]
     try:
-        build_consumers(project, registry_only=registry_only)
+        build_consumers(project, registry_only=registry_only, rayon_version=rayon_version)
     except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
