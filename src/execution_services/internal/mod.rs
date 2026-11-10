@@ -7,7 +7,6 @@
 // =============================================================================
 //! Private helpers that coordinate execution service domains.
 
-pub(super) mod capacity_change_receiver;
 mod facade_intent;
 pub(super) mod owned_wait_task;
 

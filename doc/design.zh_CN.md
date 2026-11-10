@@ -16,7 +16,7 @@
 - `submission.rs` 实现立即提交和共享 native 提交适配。
 - `waiting_submission.rs` 实现四个容量等待 API。blocking 使用任务所有权包装器和共享重试循环；CPU、Tokio blocking 和 IO 使用原生拒绝返回任务的 API 重试。
 - `internal/execution_services_admission.rs` 管理单调关闭的门面意图并解析请求域。
-- `internal/submission_retry.rs` 仅在 blocking 提交饱和时重试，并在尝试之间等待容量变化通知。
+- `internal/submission_retry.rs` 仅在 blocking 提交饱和时重试，并通过 Tokio `watch::Receiver<u64>` 在尝试之间等待容量变化通知。
 - `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有 blocking callable。
 - `lifecycle.rs` 关闭各启用域，并通过异步通知等待终止。
 
