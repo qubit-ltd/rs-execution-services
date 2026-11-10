@@ -41,3 +41,34 @@ jobs:
       - name: Check extracted package consumers
         run: python3 .infra/tools/check-packaged-documentation-consumer.py
         working-directory: rs-execution-services
+
+  registry-consumers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          path: rs-execution-services
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-executor
+          ref: dev-starfish
+          path: rs-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-rayon-executor
+          ref: dev-starfish
+          path: rs-rayon-executor
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: qubit-ltd/rs-tokio-executor
+          ref: dev-starfish
+          path: rs-tokio-executor
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: 1.94.0
+      - name: Check consumer verifier regressions
+        working-directory: rs-execution-services
+        run: python3 .infra/tools/check-packaged-documentation-consumer.py --self-test
+      - name: Verify archived consumers with registry dependencies
+        working-directory: rs-execution-services
+        run: python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only

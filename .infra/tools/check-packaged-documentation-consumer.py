@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Build archived documentation consumers with allowlisted executor path dependencies."""
+"""Build archived documentation consumers with source or registry dependencies."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,7 @@ import sys
 import tarfile
 import tempfile
 import tomllib
+from unittest import mock
 
 
 PACKAGE_NAME = "qubit-execution-services"
@@ -20,9 +22,14 @@ CONSUMERS = (
 )
 
 
-def run(command: list[str], cwd: Path, show_stdout: bool = True) -> str:
+def run(
+    command: list[str],
+    cwd: Path,
+    show_stdout: bool = True,
+    env: dict[str, str] | None = None,
+) -> str:
     print(f"$ (cd {cwd} && {' '.join(command)})", flush=True)
-    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=False)
+    result = subprocess.run(command, cwd=cwd, text=True, capture_output=True, check=False, env=env)
     if result.stdout and show_stdout:
         print(result.stdout, end="")
     if result.returncode != 0:
@@ -34,8 +41,8 @@ def run(command: list[str], cwd: Path, show_stdout: bool = True) -> str:
     return result.stdout
 
 
-def check_local_patch_configs(cwd: Path) -> list[Path]:
-    cargo_home = Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
+def check_local_patch_configs(cwd: Path, cargo_home: Path | None = None) -> list[Path]:
+    cargo_home = cargo_home or Path(os.environ.get("CARGO_HOME", Path.home() / ".cargo"))
     candidates = {cargo_home / "config.toml", cargo_home / "config"}
     for directory in (cwd, *cwd.parents):
         candidates.add(directory / ".cargo" / "config.toml")
@@ -62,6 +69,8 @@ def check_metadata(
     consumer_manifest: Path,
     package_manifest: Path,
     path_dependency_manifests: dict[str, Path],
+    consumer_package_name: str | None = None,
+    registry_only: bool = False,
 ) -> None:
     allowed_manifests = {consumer_manifest.resolve(), package_manifest.resolve()}
     expected_path_manifests = {
@@ -84,7 +93,11 @@ def check_metadata(
                 )
             else:
                 resolved_path_dependencies.add(expected_name)
-        elif not isinstance(source, str) or not source.startswith("registry+"):
+        elif (
+            not isinstance(source, str)
+            or not source.startswith("registry+")
+            or (registry_only and source != "registry+https://github.com/rust-lang/crates.io-index")
+        ):
             unexpected.append(f"{package['name']} from {source!r} at {manifest}")
     missing_path_dependencies = set(path_dependency_manifests) - resolved_path_dependencies
     if missing_path_dependencies:
@@ -111,6 +124,20 @@ def check_metadata(
             f"consumer metadata did not resolve {PACKAGE_NAME} from the extracted package "
             "with source=None and its exact manifest path"
         )
+    if consumer_package_name is not None:
+        consumer_package = next(
+            (
+                item for item in metadata.get("packages", [])
+                if Path(item["manifest_path"]).resolve() == consumer_manifest.resolve()
+                and item.get("source") is None
+            ),
+            None,
+        )
+        if consumer_package is None or consumer_package.get("name") != consumer_package_name:
+            raise RuntimeError(
+                f"consumer metadata did not resolve expected {consumer_package_name} from "
+                f"{consumer_manifest}"
+            )
 
 
 def self_test() -> None:
@@ -133,6 +160,127 @@ def self_test() -> None:
         package["name"]: Path(package["manifest_path"])
         for package in latest_path_dependencies
     }
+    registry_graph = metadata(
+        *allowed_local,
+        entry("qubit-executor", "registry+https://github.com/rust-lang/crates.io-index", Path("/tmp/registry/qubit-executor/Cargo.toml")),
+    )
+    check_metadata(
+        registry_graph, consumer, package, {},
+        consumer_package_name="consumer", registry_only=True,
+    )
+    try:
+        check_metadata(
+            metadata(*allowed_local, entry("alternate-registry", "registry+https://example.test/index", Path("/tmp/registry/other/Cargo.toml"))),
+            consumer, package, {}, registry_only=True,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("registry-only accepted a non-crates.io registry source")
+    try:
+        check_metadata(
+            metadata(*allowed_local, *latest_path_dependencies), consumer, package, {}
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("registry-only accepted local executor dependencies")
+
+    strict_manifest = consumer_manifest("strict_consumer", package.parent, "0.10.4", ["rt", "time"], None, registry_only=True)
+    if (
+        "[patch" in strict_manifest
+        or "rs-executor" in strict_manifest
+        or "rs-rayon-executor" in strict_manifest
+        or "rs-tokio-executor" in strict_manifest
+        or 'version = "^1.53"' not in strict_manifest
+    ):
+        raise RuntimeError("registry-only consumer manifest did not preserve strict dependency constraints")
+    try:
+        check_metadata(
+            metadata(entry("renamed_consumer", None, consumer), entry(PACKAGE_NAME, None, package)),
+            consumer, package, {}, consumer_package_name="strict_consumer", registry_only=True,
+        )
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("registry-only accepted an unexpected consumer package name")
+    for source_manifest in (
+        '[package]\nname="bad"\nversion="0.1.0"\n[dependencies]\nx={path="../sibling"}\n',
+        '[package]\nname="bad"\nversion="0.1.0"\n[dependencies]\nx={git="https://example.test/x"}\n',
+        '[package]\nname="bad"\nversion="0.1.0"\n[patch.crates-io]\nx={path="../sibling"}\n',
+    ):
+        with tempfile.TemporaryDirectory(prefix="registry-manifest-self-test-") as temporary:
+            candidate = Path(temporary) / "Cargo.toml"
+            candidate.write_text(source_manifest)
+            try:
+                check_manifest_sources(candidate, {})
+            except RuntimeError:
+                pass
+            else:
+                raise RuntimeError("registry-only manifest source validation accepted path/git/patch input")
+    with tempfile.TemporaryDirectory(prefix="registry-allowed-path-self-test-") as temporary:
+        temporary_path = Path(temporary)
+        candidate = temporary_path / "Cargo.toml"
+        archive_package = temporary_path / "archive-package"
+        archive_package.mkdir()
+        (archive_package / "Cargo.toml").write_text('[package]\nname="qubit-execution-services"\n')
+        candidate.write_text(
+            f'[dependencies]\n{PACKAGE_NAME}={{path={json.dumps(str(archive_package))}}}\n'
+        )
+        check_manifest_sources(candidate, {PACKAGE_NAME: archive_package})
+    with tempfile.TemporaryDirectory(prefix="registry-env-self-test-") as temporary:
+        cargo_home = Path(temporary) / "cargo-home"
+        target_dir = Path(temporary) / "target"
+        cargo_home.mkdir()
+        target_dir.mkdir()
+        with mock.patch.dict(os.environ, {
+            "HOME": temporary,
+            "RUSTUP_HOME": str(Path(temporary) / "rustup"),
+            "RUSTUP_TOOLCHAIN": "1.94.0",
+            "CARGO_HOME": "/dev/null/inherited-cargo-home",
+            "CARGO_TARGET_DIR": "/dev/null/inherited-target",
+            "CARGO_REGISTRIES_CRATES_IO_INDEX": "file:///dev/null",
+            "CARGO_NET_OFFLINE": "true",
+        }):
+            isolated_env = registry_environment(cargo_home, target_dir)
+        if set(key for key in isolated_env if key.startswith("CARGO_")) != {"CARGO_HOME", "CARGO_TARGET_DIR"}:
+            raise RuntimeError("registry-only environment retained inherited Cargo override variables")
+        if isolated_env["CARGO_HOME"] != str(cargo_home) or isolated_env["CARGO_TARGET_DIR"] != str(target_dir):
+            raise RuntimeError("registry-only environment did not use isolated Cargo directories")
+        if isolated_env.get("HOME") != temporary or isolated_env.get("RUSTUP_TOOLCHAIN") != "1.94.0":
+            raise RuntimeError("registry-only environment did not preserve HOME and the selected toolchain")
+        if isolated_env.get("RUSTUP_HOME") != str(Path(temporary) / "rustup"):
+            raise RuntimeError("registry-only environment did not preserve RUSTUP_HOME")
+        consumer_dir = Path(temporary) / "work" / "consumer"
+        consumer_dir.mkdir(parents=True)
+        checked_configs = check_strict_cargo_configs(consumer_dir, cargo_home)
+        if checked_configs != [cargo_home / "config.toml"]:
+            raise RuntimeError("registry-only did not report its isolated Cargo config")
+        ancestor_config_dir = Path(temporary) / "work" / ".cargo"
+        ancestor_config_dir.mkdir()
+        (ancestor_config_dir / "config.toml").write_text(
+            '[source.crates-io]\nreplace-with = "local-registry"\n'
+        )
+        try:
+            check_strict_cargo_configs(consumer_dir, cargo_home)
+        except RuntimeError as error:
+            if "inherited Cargo configuration" not in str(error):
+                raise
+        else:
+            raise RuntimeError("registry-only accepted an ancestor Cargo source override")
+    source_manifest = consumer_manifest("source_consumer", package.parent, "0.10.4", ["rt"], Path("/tmp/rs-tokio-executor"))
+    if "[patch.crates-io]" not in source_manifest or 'version = "^1.53"' not in source_manifest:
+        raise RuntimeError("source consumer manifest lost its executor patches or Tokio constraint")
+
+    with mock.patch("subprocess.run", return_value=mock.Mock(returncode=7, stdout="", stderr="cargo failed")) as cargo_run:
+        try:
+            run(["cargo", "metadata"], Path("/tmp/consumer"), show_stdout=False)
+        except RuntimeError:
+            pass
+        else:
+            raise RuntimeError("self-test swallowed a failed Cargo command")
+        if cargo_run.call_count != 1:
+            raise RuntimeError("self-test continued after a failed Cargo command")
     try:
         check_metadata(
             metadata(*allowed_local, *latest_path_dependencies),
@@ -208,6 +356,11 @@ def self_test() -> None:
             entry(PACKAGE_NAME, "git+https://example.test/repo#abc", package),
             *latest_path_dependencies,
         ),
+        metadata(
+            entry("consumer", None, consumer),
+            entry(PACKAGE_NAME, None, Path("/tmp/alternate-target/Cargo.toml")),
+            *latest_path_dependencies,
+        ),
     ):
         try:
             check_metadata(invalid_target, consumer, package, local_dependency_manifests)
@@ -267,13 +420,22 @@ def consumer_manifest(
     package_path: Path,
     package_version: str,
     tokio_features: list[str],
-    tokio_executor_path: Path,
+    tokio_executor_path: Path | None,
+    registry_only: bool = False,
 ) -> str:
     features = ", ".join(json.dumps(feature) for feature in tokio_features)
     version_parts = package_version.split(".")
     if len(version_parts) < 2:
         raise RuntimeError(f"invalid package version: {package_version}")
     version_requirement = f"^{version_parts[0]}.{version_parts[1]}"
+    patches = ""
+    if not registry_only:
+        if tokio_executor_path is None:
+            raise RuntimeError("source consumer requires a Tokio executor path")
+        patches = "[patch.crates-io]\n"
+        patches += f'qubit-tokio-executor = {{ path = {json.dumps(str(tokio_executor_path))} }}\n'
+        patches += f'qubit-rayon-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-rayon-executor"))} }}\n'
+        patches += f'qubit-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-executor"))} }}\n'
     return f'''[package]
 name = "{name}"
 version = "0.0.0"
@@ -282,15 +444,104 @@ publish = false
 
 [dependencies]
 {PACKAGE_NAME} = {{ path = {json.dumps(str(package_path))}, version = {json.dumps(version_requirement)} }}
-tokio = {{ version = "^1.54", features = [{features}] }}
+tokio = {{ version = "^1.53", features = [{features}] }}
 
-[patch.crates-io]
-qubit-tokio-executor = {{ path = {json.dumps(str(tokio_executor_path))} }}
-qubit-rayon-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-rayon-executor"))} }}
-qubit-executor = {{ path = {json.dumps(str(tokio_executor_path.parent / "rs-executor"))} }}
+{patches}
 
 [workspace]
 '''
+
+
+def registry_environment(cargo_home: Path, target_dir: Path) -> dict[str, str]:
+    keep = {
+        "PATH",
+        "HOME",
+        "RUSTUP_HOME",
+        "RUSTUP_TOOLCHAIN",
+        "SSL_CERT_FILE",
+        "SSL_CERT_DIR",
+        "CURL_CA_BUNDLE",
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    }
+    environment = {key: value for key, value in os.environ.items() if key in keep}
+    if "RUSTUP_HOME" not in environment:
+        environment["RUSTUP_HOME"] = str(Path(environment.get("HOME", str(Path.home()))) / ".rustup")
+    environment.update({"CARGO_HOME": str(cargo_home), "CARGO_TARGET_DIR": str(target_dir)})
+    (cargo_home / "config.toml").write_text(
+        '[source.crates-io]\nregistry = "https://github.com/rust-lang/crates.io-index"\n'
+    )
+    return environment
+
+
+def check_strict_cargo_configs(cwd: Path, cargo_home: Path) -> list[Path]:
+    expected_config = (cargo_home / "config.toml").resolve()
+    config_files = {
+        config.resolve()
+        for directory in (cwd.resolve(), *cwd.resolve().parents)
+        for config in (directory / ".cargo" / "config.toml", directory / ".cargo" / "config")
+        if config.is_file()
+    }
+    config_files.update(
+        config.resolve()
+        for config in (cargo_home / "config.toml", cargo_home / "config")
+        if config.is_file()
+    )
+    unexpected = config_files - {expected_config}
+    if unexpected:
+        raise RuntimeError(
+            "registry-only consumer found inherited Cargo configuration: "
+            + ", ".join(map(str, sorted(unexpected)))
+        )
+    try:
+        parsed = tomllib.loads(expected_config.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise RuntimeError(f"cannot inspect isolated Cargo config {expected_config}: {error}") from error
+    expected = {
+        "source": {
+            "crates-io": {
+                "registry": "https://github.com/rust-lang/crates.io-index",
+            }
+        }
+    }
+    if parsed != expected:
+        raise RuntimeError(f"isolated Cargo config does not pin crates.io: {expected_config}")
+    return sorted(config_files)
+
+
+def check_manifest_sources(manifest: Path, allowed_path_dependencies: dict[str, Path]) -> None:
+    try:
+        parsed = tomllib.loads(manifest.read_text())
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise RuntimeError(f"cannot inspect registry-only manifest {manifest}: {error}") from error
+    if "patch" in parsed:
+        raise RuntimeError(f"registry-only manifest {manifest} must not contain [patch]")
+
+    def inspect_dependencies(dependencies: dict) -> None:
+        for name, dependency in dependencies.items():
+            if not isinstance(dependency, dict):
+                continue
+            if "git" in dependency:
+                raise RuntimeError(f"registry-only dependency {name} uses a git source")
+            if "path" in dependency:
+                expected_path = allowed_path_dependencies.get(name)
+                dependency_path = (manifest.parent / dependency["path"]).resolve()
+                if expected_path is None or dependency_path != expected_path.resolve():
+                    raise RuntimeError(f"registry-only dependency {name} uses unexpected path {dependency['path']}")
+
+    dependency_sections = ("dependencies", "dev-dependencies", "build-dependencies")
+    for section in dependency_sections:
+        inspect_dependencies(parsed.get(section, {}))
+    for target in parsed.get("target", {}).values():
+        if isinstance(target, dict):
+            for section in dependency_sections:
+                inspect_dependencies(target.get(section, {}))
 
 
 def local_path_dependency_manifests(project: Path) -> dict[str, Path]:
@@ -314,9 +565,11 @@ def local_path_dependency_manifests(project: Path) -> dict[str, Path]:
     return manifests
 
 
-def build_consumers(project: Path) -> None:
-    local_manifests = local_path_dependency_manifests(project)
-    tokio_executor_path = local_manifests["qubit-tokio-executor"].parent.resolve()
+def build_consumers(project: Path, registry_only: bool = False) -> None:
+    local_manifests = {} if registry_only else local_path_dependency_manifests(project)
+    tokio_executor_path = (
+        None if registry_only else local_manifests["qubit-tokio-executor"].parent.resolve()
+    )
     cargo_version = run(["cargo", "--version"], project).strip()
     package_version = json.loads(
         run(["cargo", "metadata", "--no-deps", "--format-version", "1"], project, show_stdout=False)
@@ -330,8 +583,8 @@ def build_consumers(project: Path) -> None:
 
     with tempfile.TemporaryDirectory(prefix="qubit-execution-services-package-") as temporary:
         work = Path(temporary)
-        config_files = check_local_patch_configs(work)
-        print("Effective Cargo config files checked: " + (", ".join(map(str, config_files)) or "none found"))
+        print("Consumer mode: " + ("registry-only" if registry_only else "source-integration"))
+        print(f"Archive SHA-256: {hashlib.sha256(archive.read_bytes()).hexdigest()}")
         extracted_root = work / "archive"
         extracted_root.mkdir()
         with tarfile.open(archive, "r:gz") as package_archive:
@@ -348,6 +601,15 @@ def build_consumers(project: Path) -> None:
         package_manifest = package_dir / "Cargo.toml"
         if not package_manifest.is_file():
             raise RuntimeError(f"package archive is missing {package_manifest.name}")
+        if registry_only:
+            check_manifest_sources(package_manifest, {})
+        strict_home = work / "cargo-home"
+        strict_target = work / "target"
+        strict_home.mkdir()
+        strict_target.mkdir()
+        if not registry_only:
+            config_files = check_local_patch_configs(work)
+            print("Cargo config files checked: " + (", ".join(map(str, config_files)) or "none found"))
         for name, features, program in CONSUMERS:
             consumer = work / name
             consumer.mkdir()
@@ -359,16 +621,27 @@ def build_consumers(project: Path) -> None:
                     package_version,
                     features,
                     tokio_executor_path,
+                    registry_only=registry_only,
                 )
             )
             source = consumer_program(package_dir, program)
             (consumer / "src").mkdir()
             (consumer / "src" / "main.rs").write_text(source)
 
+            cargo_env = None
+            if registry_only:
+                cargo_env = registry_environment(strict_home, strict_target)
+                config_files = check_strict_cargo_configs(consumer, strict_home)
+                print(
+                    "Registry-only Cargo config files checked: "
+                    + (", ".join(map(str, config_files)) or "none found")
+                )
+                check_manifest_sources(manifest, {PACKAGE_NAME: package_manifest.parent})
             run(
                 ["cargo", "metadata", "--format-version", "1", "--manifest-path", str(manifest)],
                 consumer,
                 show_stdout=False,
+                env=cargo_env,
             )
             metadata_output = run(
                 [
@@ -382,21 +655,40 @@ def build_consumers(project: Path) -> None:
                 ],
                 consumer,
                 show_stdout=False,
+                env=cargo_env,
             )
-            check_metadata(json.loads(metadata_output), manifest, package_manifest, local_manifests)
-            run(["cargo", "run", "--locked", "--manifest-path", str(manifest)], consumer)
+            resolved_metadata = json.loads(metadata_output)
+            check_metadata(
+                resolved_metadata,
+                manifest,
+                package_manifest,
+                local_manifests,
+                consumer_package_name=name.replace("-", "_"),
+                registry_only=registry_only,
+            )
+            checked_sources = sorted(
+                f"{package['name']}={package['source']}"
+                for package in resolved_metadata["packages"]
+                if package.get("source") is not None
+            )
+            print(f"{name}: verified sources: " + "; ".join(checked_sources))
+            run(["cargo", "run", "--locked", "--manifest-path", str(manifest)], consumer, env=cargo_env)
 
 
 def main() -> int:
     if len(sys.argv) == 2 and sys.argv[1] == "--self-test":
         self_test()
         return 0
-    if len(sys.argv) != 1:
-        print(f"usage: {Path(sys.argv[0]).name} [--self-test]", file=sys.stderr)
+    if len(sys.argv) == 2 and sys.argv[1] == "--registry-only":
+        registry_only = True
+    elif len(sys.argv) == 1:
+        registry_only = False
+    else:
+        print(f"usage: {Path(sys.argv[0]).name} [--self-test | --registry-only]", file=sys.stderr)
         return 2
     project = Path(__file__).resolve().parents[2]
     try:
-        build_consumers(project)
+        build_consumers(project, registry_only=registry_only)
     except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
