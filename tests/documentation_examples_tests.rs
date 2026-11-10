@@ -47,7 +47,11 @@ fn rust_code_block_containing(markdown: &str, needle: &str) -> Option<String> {
 
 #[test]
 fn test_documented_quick_start_examples_match_the_runnable_example() {
-    let expected = QUICK_START.trim_end();
+    let expected = QUICK_START
+        .split("\n#[cfg(test)]")
+        .next()
+        .expect("quick-start program should exist")
+        .trim_end();
     for (path, markdown) in [
         ("README.md", ENGLISH_README),
         ("README.zh_CN.md", CHINESE_README),

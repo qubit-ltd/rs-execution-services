@@ -38,10 +38,23 @@ tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 // =============================================================================
 //! Demonstrates submitting and awaiting work in separate execution domains.
 
+use std::future::Future;
+#[cfg(not(test))]
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let result = work.await;
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
@@ -57,17 +70,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cpu_task_capacity(1024)
             .build()?;
 
-        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+        shutdown_after(&services, async {
+            let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+            let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+            let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.await?, 42);
-        assert_eq!(cpu.await?, 55);
-        assert_eq!(io.await?, 42);
-
-        services.shutdown();
-        services.await_termination().await;
-        Ok::<(), Box<dyn std::error::Error>>(())
+            assert_eq!(blocking.await?, 42);
+            assert_eq!(cpu.await?, 55);
+            assert_eq!(io.await?, 42);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await
     })?;
 
     Ok(())
@@ -353,7 +366,7 @@ Ok(save.await?)
 
 facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
 
-三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。IO 容量为 1 时，若父任务在 IO 域内等待同域子任务，父任务会占着唯一容量而子任务无法获接纳；应把编排逻辑放在该域外，或明确分析依赖深度并设置容量和超时。
+三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。同步域的父任务若等待同域子任务，可能占用子任务需要的 worker；IO 容量为 1 时，父任务等待同域子任务会占着唯一容量，导致子任务无法获接纳。应把编排逻辑放在域外，或明确核算 worker 可用量、依赖深度和容量；详见[容量等待设计](design.zh_CN.md#容量等待算法)。
 
 用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 

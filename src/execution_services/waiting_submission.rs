@@ -30,6 +30,11 @@ impl ExecutionServices {
     /// [`TaskHandle`] for observing the result. This handle does not cancel the
     /// accepted task.
     ///
+    /// A parent task can prevent a same-domain child from running if it waits
+    /// for that child while occupying the worker the child needs. Keep such
+    /// orchestration outside the blocking domain or account for available
+    /// workers and dependency depth.
+    ///
     /// # Type Parameters
     ///
     /// * `C` - One-shot callable submitted to the blocking domain.
@@ -78,6 +83,11 @@ impl ExecutionServices {
     /// acceptance drops the callable; after acceptance, this method returns a
     /// [`TaskHandle`] for observing the result. This handle does not cancel the
     /// accepted task.
+    ///
+    /// A parent task can prevent a same-domain child from running if it waits
+    /// for that child while occupying the worker the child needs. Keep such
+    /// orchestration outside the CPU domain or account for worker availability
+    /// and dependency depth.
     ///
     /// # Type Parameters
     ///
@@ -144,6 +154,11 @@ impl ExecutionServices {
     /// acceptance drops the callable; after acceptance, this method returns a
     /// [`TaskHandle`] for observing the result. This handle does not cancel the
     /// accepted task.
+    ///
+    /// A parent task can prevent a same-domain child from running if it waits
+    /// for that child while occupying a Tokio blocking worker the child needs.
+    /// Keep such orchestration outside the blocking pool or account for worker
+    /// availability and dependency depth.
     ///
     /// Capacity notifications are advisory: another submitter may use an
     /// available slot before this method retries. No FIFO or bounded-wait
@@ -218,6 +233,12 @@ impl ExecutionServices {
     /// this method's future before acceptance drops the user future. After
     /// acceptance, the returned [`TokioTaskHandle`] supports cancellation
     /// according to Tokio task cancellation semantics.
+    ///
+    /// Avoid waiting for same-domain child work while the parent holds the
+    /// capacity that child needs. With IO capacity one, a parent awaiting a
+    /// child submitted through `spawn_io_wait` keeps the only slot occupied, so
+    /// the child cannot be accepted. Keep orchestration outside the IO domain
+    /// or explicitly account for dependency depth and capacity.
     ///
     /// Capacity notifications are advisory: another submitter may use an
     /// available slot before this method retries. No FIFO or bounded-wait

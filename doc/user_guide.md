@@ -72,10 +72,23 @@ Enable only the domains the application uses. This example selects blocking, CPU
 // =============================================================================
 //! Demonstrates submitting and awaiting work in separate execution domains.
 
+use std::future::Future;
+#[cfg(not(test))]
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let result = work.await;
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
@@ -91,17 +104,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cpu_task_capacity(1024)
             .build()?;
 
-        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+        shutdown_after(&services, async {
+            let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+            let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+            let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.await?, 42);
-        assert_eq!(cpu.await?, 55);
-        assert_eq!(io.await?, 42);
-
-        services.shutdown();
-        services.await_termination().await;
-        Ok::<(), Box<dyn std::error::Error>>(())
+            assert_eq!(blocking.await?, 42);
+            assert_eq!(cpu.await?, 55);
+            assert_eq!(io.await?, 42);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await
     })?;
 
     Ok(())
@@ -352,7 +365,7 @@ The immediate submission methods return `SubmissionError::Saturated` when the se
 
 When the facade is running, a disabled domain returns `DomainDisabled`; after shutdown or stop closes admission, every submission returns `Rejected { source: Shutdown }`, including wait calls targeting a disabled domain. An immediate submission to a full enabled domain returns `Rejected { source: Saturated }`; a wait call retries after a capacity notification. Dropping a wait future before acceptance drops its unaccepted task. These pending tasks are not counted by domain task capacity or `snapshot().accepted_unfinished`; limit the number of concurrent waiters or apply application-level timeouts when memory must be bounded.
 
-After acceptance, the three synchronous wait methods return `TaskHandle`, which reports completion but has no `cancel()` method. Dropping that result handle does not cancel the task. The IO wait method returns `TokioTaskHandle`; its cancellation requests abort and may race normal completion. Started synchronous work cannot be forcibly interrupted. A capacity-1 IO task that waits for a child submitted to the same full IO domain can deadlock; keep orchestration outside that domain or size and bound the dependency graph deliberately.
+After acceptance, the three synchronous wait methods return `TaskHandle`, which reports completion but has no `cancel()` method. Dropping that result handle does not cancel the task. The IO wait method returns `TokioTaskHandle`; its cancellation requests abort and may race normal completion. Started synchronous work cannot be forcibly interrupted. A parent that waits for same-domain child work can occupy the worker the child needs in a synchronous domain. In the IO domain, a parent awaiting a child with capacity one keeps the only slot occupied, so the child cannot be accepted. Keep orchestration outside the domain or explicitly account for worker availability, dependency depth, and capacity; see the [capacity-wait design](design.md#capacity-wait-algorithm).
 
 Size capacities from measurements. Record peak arrival rate, task service time, and the maximum queue delay the application can tolerate. Estimate each domain's in-flight demand from arrival rate multiplied by service time, then add a documented burst margin. For blocking work, size worker counts for simultaneous blocking calls and size the finite queue separately for the permitted backlog. For CPU work, start from available parallelism and bound accepted in-flight work to limit queued memory and delay. For Tokio blocking work, configure the facade's accepted-task capacity separately from the runtime's shared `max_blocking_threads`; account for other users of that runtime pool. For IO, estimate concurrent futures and their retained memory. Load test the chosen limits, inspect per-domain snapshots and `Saturated` results, and adjust from observed latency and backlog. Snapshots are observational samples and do not reserve admission capacity.
 

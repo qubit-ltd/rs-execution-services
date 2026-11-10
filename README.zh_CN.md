@@ -33,10 +33,23 @@ tokio = { version = "1.53", features = ["rt", "time"] }
 // =============================================================================
 //! Demonstrates submitting and awaiting work in separate execution domains.
 
+use std::future::Future;
+#[cfg(not(test))]
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let result = work.await;
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
@@ -52,17 +65,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cpu_task_capacity(1024)
             .build()?;
 
-        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+        shutdown_after(&services, async {
+            let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+            let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+            let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.await?, 42);
-        assert_eq!(cpu.await?, 55);
-        assert_eq!(io.await?, 42);
-
-        services.shutdown();
-        services.await_termination().await;
-        Ok::<(), Box<dyn std::error::Error>>(())
+            assert_eq!(blocking.await?, 42);
+            assert_eq!(cpu.await?, 55);
+            assert_eq!(io.await?, 42);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await
     })?;
 
     Ok(())
@@ -105,7 +118,7 @@ facade 协调已启用执行域的任务提交与生命周期操作。停止报�
 
 ## 开发环境
 
-当前工作树通过 `Cargo.toml` 中带版本约束的 path 依赖使用本地最新版 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor`；构建时需将这些仓库放在本仓库旁边。`.cargo/config.toml` 会将传递依赖及打包验证中的 executor 依赖也 patch 到这些 checkout。独立的 application 和 documentation consumer 也需要这些 executor 兄弟仓库。IoC 集成 fixture 还使用本地 path 依赖：请将 `rs-ioc`、`rs-event-bus`、`rs-config`、`rs-fs-registry`、`rs-fs-local` 和 `rs-fs` 检出到本仓库旁边，并检出这些清单引用的传递 path 依赖（`rs-value`、`rs-local-files`、`rs-redact` 和 `rs-fs-testkit`）。固定集成工作流记录一组固定依赖提交；current 集成工作流跟踪 `rs-ioc/main`，使用本仓库维护的 current consumer 锁文件，并固定其他兄弟仓库。这些 fixture 检查验证本地集成布局，不代表 registry 发布验证。运行 `cargo test --locked` 和 `cargo test --locked --all-features` 可检查已提交锁文件是否无需修改即可解析。
+当前工作树通过 `Cargo.toml` 中带版本约束的 path 依赖使用本地最新版 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor`；构建时需将这些仓库放在本仓库旁边。`.cargo/config.toml` 会将传递依赖及打包验证中的 executor 依赖也 patch 到这些 checkout。独立的 application 和 documentation consumer 也需要这些 executor 兄弟仓库。IoC 集成 fixture 还使用本地 path 依赖：请将 `rs-ioc`、`rs-event-bus`、`rs-config`、`rs-fs-registry`、`rs-fs-local` 和 `rs-fs` 检出到本仓库旁边，并检出这些清单引用的传递 path 依赖（`rs-value`、`rs-local-files`、`rs-redact` 和 `rs-fs-testkit`）。固定集成工作流记录一组固定依赖提交；current 集成工作流跟踪 `rs-ioc/main`，使用本仓库维护的 current consumer 锁文件，并固定其他兄弟仓库。这些 fixture 检查验证本地集成布局，不代表 registry 发布验证。[发布包文档 consumer workflow](.github/workflows/packaged-documentation-consumer.yml) 会把 crate 归档解压到 checkout 外，并验证文档消费者的传递依赖从 registry 解析；它不检查最小 semver 版本。运行 `cargo test --locked` 和 `cargo test --locked --all-features` 可检查已提交锁文件是否无需修改即可解析。
 
 ## 测试
 

@@ -33,10 +33,23 @@ An application can submit a synchronous blocking operation, a CPU calculation, a
 // =============================================================================
 //! Demonstrates submitting and awaiting work in separate execution domains.
 
+use std::future::Future;
+#[cfg(not(test))]
 use std::io;
 
 use qubit_execution_services::ExecutionServices;
 
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
+where
+    F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
+{
+    let result = work.await;
+    services.shutdown();
+    services.await_termination().await;
+    result
+}
+
+#[cfg(not(test))]
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
 
@@ -52,17 +65,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             .cpu_task_capacity(1024)
             .build()?;
 
-        let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
-        let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
-        let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
+        shutdown_after(&services, async {
+            let blocking = services.submit_blocking_callable(|| Ok::<usize, io::Error>(40 + 2))?;
+            let cpu = services.submit_cpu_callable(|| Ok::<usize, io::Error>((1..=10).sum()))?;
+            let io = services.spawn_io(async { Ok::<usize, io::Error>(6 * 7) })?;
 
-        assert_eq!(blocking.await?, 42);
-        assert_eq!(cpu.await?, 55);
-        assert_eq!(io.await?, 42);
-
-        services.shutdown();
-        services.await_termination().await;
-        Ok::<(), Box<dyn std::error::Error>>(())
+            assert_eq!(blocking.await?, 42);
+            assert_eq!(cpu.await?, 55);
+            assert_eq!(io.await?, 42);
+            Ok::<(), Box<dyn std::error::Error>>(())
+        })
+        .await
     })?;
 
     Ok(())
@@ -105,7 +118,7 @@ For application shutdown, stop entry points and wait for accepted producers that
 
 ## Development Setup
 
-The working tree uses the latest local `rs-executor` and `rs-tokio-executor` checkouts through versioned path dependencies in `Cargo.toml`. `.cargo/config.toml` patches `qubit-executor`, `qubit-rayon-executor`, and `qubit-tokio-executor` to local checkouts, so keep all three executor repositories beside this one to build the crate. The standalone application and documentation consumers also need these executor siblings. The IoC integration fixture additionally uses local path dependencies: check out `rs-ioc`, `rs-event-bus`, `rs-config`, `rs-fs-registry`, `rs-fs-local`, and `rs-fs` beside this repository, together with the transitive path dependencies referenced by those manifests (`rs-value`, `rs-local-files`, `rs-redact`, and `rs-fs-testkit`). The pinned integration workflow records a fixed dependency set; the current integration workflow follows `rs-ioc/main`, supplies the repository-pinned lockfile for its current consumer, and keeps its other sibling repositories pinned. These fixture checks validate local integration layouts, not registry publication. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
+The working tree uses the latest local `rs-executor` and `rs-tokio-executor` checkouts through versioned path dependencies in `Cargo.toml`. `.cargo/config.toml` patches `qubit-executor`, `qubit-rayon-executor`, and `qubit-tokio-executor` to local checkouts, so keep all three executor repositories beside this one to build the crate. The standalone application and documentation consumers also need these executor siblings. The IoC integration fixture additionally uses local path dependencies: check out `rs-ioc`, `rs-event-bus`, `rs-config`, `rs-fs-registry`, `rs-fs-local`, and `rs-fs` beside this repository, together with the transitive path dependencies referenced by those manifests (`rs-value`, `rs-local-files`, `rs-redact`, and `rs-fs-testkit`). The pinned integration workflow records a fixed dependency set; the current integration workflow follows `rs-ioc/main`, supplies the repository-pinned lockfile for its current consumer, and keeps its other sibling repositories pinned. These fixture checks validate local integration layouts, not registry publication. The [packaged documentation consumer workflow](.github/workflows/packaged-documentation-consumer.yml) extracts the built crate outside the checkout and verifies that documented consumers resolve transitive dependencies from the registry; it does not test minimum semver versions. Use `cargo test --locked` and `cargo test --locked --all-features` to check that the committed lockfile resolves without changes.
 
 ## Testing
 
