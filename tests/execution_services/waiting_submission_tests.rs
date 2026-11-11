@@ -28,6 +28,7 @@ use tokio::join;
 use tokio::pin;
 use tokio::runtime::Handle;
 use tokio::sync::oneshot;
+use tokio::task::JoinHandle;
 use tokio::task::yield_now;
 use tokio::test as tokio_test;
 use tokio::time::timeout;
@@ -385,26 +386,25 @@ fn wait_for_started(rx: &mpsc::Receiver<usize>, expected: usize, domain: WaitCom
     );
 }
 
-async fn wait_for_one_waiter(
-    waiters: &mut [ErasedWait<'_>; 2],
+struct WaiterTaskGuard(Vec<JoinHandle<()>>);
+
+impl Drop for WaiterTaskGuard {
+    fn drop(&mut self) {
+        for task in &self.0 {
+            task.abort();
+        }
+    }
+}
+
+async fn receive_waiter_result(
+    completed: &mut tokio::sync::mpsc::Receiver<(usize, Result<ErasedTask, ExecutionServicesSubmissionError>)>,
     domain: WaitCompetitionDomain,
     scenario: &str,
-) -> (usize, ErasedTask) {
-    timeout(TEST_TIMEOUT, async {
-        loop {
-            for (index, waiter) in waiters.iter_mut().enumerate() {
-                if let Poll::Ready(result) = poll_once(waiter.as_mut()).await {
-                    let task = result.unwrap_or_else(|error| {
-                        panic!("{domain:?}/{scenario}: waiter {index} unexpectedly rejected: {error}")
-                    });
-                    return (index, task);
-                }
-            }
-            yield_now().await;
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("{domain:?}/{scenario}: no waiter acquired capacity before timeout"))
+) -> (usize, Result<ErasedTask, ExecutionServicesSubmissionError>) {
+    timeout(TEST_TIMEOUT, completed.recv())
+        .await
+        .unwrap_or_else(|_| panic!("{domain:?}/{scenario}: waiter made no progress before timeout"))
+        .unwrap_or_else(|| panic!("{domain:?}/{scenario}: waiter result channel closed"))
 }
 
 async fn expect_successful_waiter_task(
@@ -434,7 +434,8 @@ async fn wait_for_payload_drop(drops: &AtomicUsize, domain: WaitCompetitionDomai
 
 async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompetitionScenario) {
     let label = scenario.name();
-    let services = build_competition_services(domain);
+    let mut waiter_tasks = WaiterTaskGuard(Vec::new());
+    let services = Arc::new(build_competition_services(domain));
     let mut occupied = occupy_competition_capacity(&services, domain);
 
     let (started_1_tx, started_1_rx) = mpsc::channel();
@@ -443,35 +444,67 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
     let (release_2, gate_2) = waiter_gate(domain);
     let calls: [Arc<AtomicUsize>; 2] = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
     let drops: [Arc<AtomicUsize>; 2] = std::array::from_fn(|_| Arc::new(AtomicUsize::new(0)));
-    let mut waiters = [
-        make_competition_waiter(
-            &services,
-            domain,
-            1,
+    let (armed_1_tx, armed_1_rx) = oneshot::channel();
+    let (armed_2_tx, armed_2_rx) = oneshot::channel();
+    let (completed_tx, mut completed_rx) = tokio::sync::mpsc::channel(2);
+    let spawn_waiter = |waiter_id: usize,
+                        started,
+                        gate,
+                        calls: Arc<AtomicUsize>,
+                        drops: Arc<AtomicUsize>,
+                        armed_tx: oneshot::Sender<()>,
+                        completed_tx: tokio::sync::mpsc::Sender<(
+        usize,
+        Result<ErasedTask, ExecutionServicesSubmissionError>,
+    )>| {
+        let services = Arc::clone(&services);
+        tokio::spawn(async move {
+            let mut waiter = make_competition_waiter(&services, domain, waiter_id + 1, started, gate, calls, drops);
+            let mut armed = Some(armed_tx);
+            let result = std::future::poll_fn(|cx| {
+                let state = waiter.as_mut().poll(cx);
+                if state.is_pending()
+                    && let Some(sender) = armed.take()
+                {
+                    let _ = sender.send(());
+                }
+                state
+            })
+            .await
+            .map(erase_task_handle);
+            let _ = completed_tx.send((waiter_id, result)).await;
+        })
+    };
+    waiter_tasks.0.extend([
+        spawn_waiter(
+            0,
             started_1_tx,
             gate_1,
             Arc::clone(&calls[0]),
             Arc::clone(&drops[0]),
+            armed_1_tx,
+            completed_tx.clone(),
         ),
-        make_competition_waiter(
-            &services,
-            domain,
-            2,
+        spawn_waiter(
+            1,
             started_2_tx,
             gate_2,
             Arc::clone(&calls[1]),
             Arc::clone(&drops[1]),
+            armed_2_tx,
+            completed_tx,
         ),
-    ];
+    ]);
     let mut waiter_releases = [release_1, release_2];
     let waiter_started = [started_1_rx, started_2_rx];
 
-    for waiter in &mut waiters {
-        assert!(
-            poll_once(waiter.as_mut()).await.is_pending(),
-            "{domain:?}/{label}: both initial waiters should be pending while capacity is full",
-        );
-    }
+    timeout(TEST_TIMEOUT, async {
+        let (armed_1, armed_2) = tokio::join!(armed_1_rx, armed_2_rx);
+        armed_1.expect("waiter 1 should register its pending wait");
+        armed_2.expect("waiter 2 should register its pending wait");
+    })
+    .await
+    .unwrap_or_else(|_| panic!("{domain:?}/{label}: waiters did not both register"));
     assert_eq!(
         calls[0].load(Ordering::SeqCst),
         0,
@@ -490,12 +523,10 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
             .unwrap_or_else(|error| panic!("{domain:?}/{label}: queued blocker did not start: {error}"));
     }
 
-    let (accepted_id, accepted_task) = wait_for_one_waiter(&mut waiters, domain, label).await;
+    let (accepted_id, accepted_result) = receive_waiter_result(&mut completed_rx, domain, label).await;
+    let accepted_task = accepted_result
+        .unwrap_or_else(|error| panic!("{domain:?}/{label}: waiter {accepted_id} unexpectedly rejected: {error}"));
     let pending_id = 1 - accepted_id;
-    assert!(
-        poll_once(waiters[pending_id].as_mut()).await.is_pending(),
-        "{domain:?}/{label}: the unselected waiter must remain pending after the single capacity release",
-    );
     assert_eq!(
         calls[pending_id].load(Ordering::SeqCst),
         0,
@@ -511,12 +542,13 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
             waiter_releases[accepted_id].release();
             expect_successful_waiter_task(accepted_task, domain, label, accepted_id + 1).await;
 
-            let second_task = timeout(TEST_TIMEOUT, waiters[pending_id].as_mut())
-                .await
-                .unwrap_or_else(|_| panic!("{domain:?}/{label}: remaining waiter did not acquire released capacity"))
+            let (second_id, second_result) = receive_waiter_result(&mut completed_rx, domain, label).await;
+            assert_eq!(
+                second_id, pending_id,
+                "{domain:?}/{label}: only the pending waiter should complete"
+            );
+            let second_task = second_result
                 .unwrap_or_else(|error| panic!("{domain:?}/{label}: remaining waiter was rejected: {error}"));
-            let finished_waiter = std::mem::replace(&mut waiters[pending_id], Box::pin(std::future::pending()));
-            drop(finished_waiter);
             wait_for_started(&waiter_started[pending_id], pending_id + 1, domain, label);
             waiter_releases[pending_id].release();
             expect_successful_waiter_task(second_task, domain, label, pending_id + 1).await;
@@ -528,9 +560,11 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
                 let _stop_report = services.stop();
             }
 
-            let rejected = timeout(TEST_TIMEOUT, waiters[pending_id].as_mut())
-                .await
-                .unwrap_or_else(|_| panic!("{domain:?}/{label}: pending waiter did not wake after close"));
+            let (rejected_id, rejected) = receive_waiter_result(&mut completed_rx, domain, label).await;
+            assert_eq!(
+                rejected_id, pending_id,
+                "{domain:?}/{label}: closed pending waiter should complete"
+            );
             assert!(
                 matches!(
                     rejected,
@@ -540,8 +574,6 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
                 ),
                 "{domain:?}/{label}: remaining waiter should be rejected with Shutdown",
             );
-            let finished_waiter = std::mem::replace(&mut waiters[pending_id], Box::pin(std::future::pending()));
-            drop(finished_waiter);
             for release in &mut occupied.releases {
                 release.release();
             }
@@ -584,6 +616,12 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
         timeout(TEST_TIMEOUT, services.await_termination())
             .await
             .unwrap_or_else(|_| panic!("{domain:?}/{label}: services did not terminate"));
+    }
+    for task in waiter_tasks.0.drain(..) {
+        timeout(TEST_TIMEOUT, task)
+            .await
+            .unwrap_or_else(|_| panic!("{domain:?}/{label}: waiter task did not join"))
+            .unwrap_or_else(|error| panic!("{domain:?}/{label}: waiter task panicked: {error}"));
     }
 
     if !matches!(scenario, WaitCompetitionScenario::Progress) {
