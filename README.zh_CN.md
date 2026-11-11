@@ -120,7 +120,7 @@ facade 协调已启用执行域的任务提交与生命周期操作。停止报�
 
 当前工作树通过 `Cargo.toml` 中带版本约束的 path 依赖使用本地最新版 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor`；构建时需将这些仓库放在本仓库旁边。`.cargo/config.toml` 会将传递依赖及打包验证中的 executor 依赖也 patch 到这些 checkout。源码集成 documentation consumer 也使用这些本地 executor 兄弟仓库。IoC 集成 fixture 还使用本地 path 依赖：请将 `rs-ioc`、`rs-event-bus`、`rs-config`、`rs-fs-registry`、`rs-fs-local` 和 `rs-fs` 检出到本仓库旁边，并检出这些清单引用的传递 path 依赖（`rs-value`、`rs-local-files`、`rs-redact` 和 `rs-fs-testkit`）。固定集成工作流记录一组固定依赖提交；current 集成工作流跟踪 `rs-ioc/main`，使用本仓库维护的 current consumer 锁文件，并固定其他兄弟仓库。这些 fixture 检查验证本地集成布局，不代表 registry 发布验证。
 
-[发布包文档 consumer workflow](.github/workflows/packaged-documentation-consumer.yml) 运行源码集成检查和 registry-only 检查。源码集成消费者检查允许 `qubit-executor`、`qubit-rayon-executor` 和 `qubit-tokio-executor` 使用本地覆盖。registry-only 检查使用 registry 依赖构建并运行归档示例，仅允许消费者和解压目标 crate 为本地包。发布验收须同时通过两项检查；缺失 registry 依赖会导致检查失败并阻止发布验收。两项检查均不证明最小 semver 兼容性。发布验收前可运行严格检查：`python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only`。运行 `cargo test --locked` 和 `cargo test --locked --all-features` 可检查已提交锁文件是否无需修改即可解析。
+[发布包文档 consumer workflow](.github/workflows/packaged-documentation-consumer.yml) 运行源码集成检查和 registry-only 检查。源码集成消费者检查允许 `qubit-executor`、`qubit-rayon-executor` 和 `qubit-tokio-executor` 使用本地覆盖。registry-only 检查使用 registry 依赖构建并运行归档示例，仅允许消费者和解压目标 crate 为本地包。发布验收须同时通过两项检查；缺失 registry 依赖会导致检查失败并阻止发布验收。registry 矩阵还会单独检查 manifest 声明的 Rayon 下界对应的精确 crates.io 版本；它验证该 Rayon 版本与本次解析出的其他依赖组合兼容，不表示所有依赖都处于最低版本。发布验收前可运行严格检查：`python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only`。运行 `cargo test --locked` 和 `cargo test --locked --all-features` 可检查已提交锁文件是否无需修改即可解析。
 
 ## 测试
 

@@ -376,7 +376,7 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 
 ### 有序关闭与强制停止
 
-`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后只对已启用域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，已启用域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`：启用域字段为 `Some(StopReport)`，未启用域字段为 `None`。报告不提供跨域总数，各域依次取样。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应按各域的停止契约解释计数。
+`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后只对已启用域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，已启用域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`：启用域字段为 `Some(StopReport)`，未启用域字段为 `None`。取消排队任务时，可能在 stop 调用线程同步析构用户捕获值；清理没有固定耗时上限，也可能延迟后续执行域收到 stop 请求。报告不提供跨域总数，各域依次取样。析构应短且不阻塞；异步 timeout 不能抢占同步 `stop()` 调用。需要异步清理时应由仍存活的所有者驱动；不要在本服务清理中同步等待其终止，因为终止可能依赖这段清理。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应按各域的停止契约解释计数。
 
 `await_termination()` 通过异步通知等待已启用执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。
 
@@ -392,7 +392,7 @@ services.await_termination().await;
 assert!(services.is_terminated());
 ```
 
-等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了跨域子任务完成后再关闭的顺序。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。
+等待期间要保持传入的 Tokio runtime 运行；所有报表任务完成后才释放它们使用的旧系统连接和存储客户端。可运行的[应用关闭示例](../examples/application_shutdown.rs)展示了跨域子任务完成后再关闭的顺序。底层执行器支持时，`stop()` 会取消排队任务，但不能强制中断已经开始运行的同步工作。取消排队任务可能在调用线程同步执行捕获值析构，耗时没有上限。析构应短且不阻塞；异步清理由仍存活的所有者完成。把同步 stop 放到其他线程只能隔离调用线程，不能保证清理完成时间，也不能强行取消 stop。
 
 丢弃 `ExecutionServices` 与调用 `shutdown()` 或 `stop()` 不同：丢弃只释放门面持有的各域服务值，不会统一请求 stop，也不会等待所有已接收任务结束。`blocking` 服务值析构时会向线程池请求 graceful shutdown。CPU wrapper 的析构不会调用它的显式 `shutdown()` 或 `stop()`；Rayon pool 值的析构会发出终止信号，现有工作完成后 worker 才会逐步退出，但这不是 facade 对服务终止的等待。丢弃 Tokio blocking 或 IO 服务 wrapper 不会请求取消已接收任务；这些任务仍由 Tokio 的任务和 runtime 生命周期管理。不要依赖门面析构中止 Tokio 任务，也不要把析构当作任务清理已经完成的证明。
 

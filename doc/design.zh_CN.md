@@ -14,9 +14,9 @@
 
 - `execution_services.rs` 管理门面、Builder 入口、执行域清单和快照组合。
 - `submission.rs` 实现立即提交和共享 native 提交适配。
-- `waiting_submission.rs` 实现四个容量等待 API。blocking 使用任务所有权包装器和共享重试循环；CPU、Tokio blocking 和 IO 使用原生拒绝返回任务的 API 重试。
+- `waiting_submission.rs` 实现四个容量等待 API。四个域共享重试控制流；blocking 使用任务所有权包装器，CPU、Tokio blocking 和 IO 则通过原生拒绝值取回任务。
 - `internal/execution_services_admission.rs` 管理单调关闭的门面意图并解析请求域。
-- `internal/submission_retry.rs` 仅在 blocking 提交饱和时重试，并通过 Tokio `watch::Receiver<u64>` 在尝试之间等待容量变化通知。
+- `internal/submission_retry.rs` 在四个域的提交饱和时重试，并通过 Tokio `watch::Receiver<u64>` 在尝试之间等待容量变化通知。
 - `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有 blocking callable。
 - `lifecycle.rs` 关闭各启用域，并通过异步通知等待终止。
 
@@ -57,9 +57,9 @@ wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第�
 | IO wait 返回的 `TokioTaskHandle` | 可请求 Tokio task abort；可能与正常完成竞争，也不保证用户清理代码运行。 |
 | 已开始的同步 callable | 句柄不能强制中断。 |
 | `shutdown()` | 关闭准入，并按各启用服务契约请求有序完成。 |
-| `stop()` | 关闭准入并请求强制停止；不能强行中断已运行的同步代码。 |
+| `stop()` | 关闭准入并请求强制停止；不能强行中断已运行的同步代码。取消排队任务时，可能在调用线程同步析构用户捕获值，且没有固定耗时上限。 |
 
-在 Tokio 服务终止前，保持传入的 runtime 持续运行。调用 `shutdown()` 前先停止外部生产者，并等待可能提交子任务的已接收生产者退出。
+在 Tokio 服务终止前，保持传入的 runtime 持续运行。调用 `shutdown()` 前先停止外部生产者，并等待可能提交子任务的已接收生产者退出。析构应短且不阻塞：`stop()` 会同步清理排队任务，阻塞的析构可能延迟后续执行域收到 stop 请求；异步 timeout 不能抢占同步 stop 调用。需要异步清理时由仍存活的所有者驱动；不要在清理中同步等待本服务终止，因为终止可能依赖当前清理完成。
 
 丢弃 facade 只释放其持有的服务值；它不会统一请求 `stop()`，也不会等待所有已接收任务完成。Cargo metadata 解析到的 `qubit-thread-pool 0.12.1` 源码显示，`ThreadPool` 值析构时会请求 graceful shutdown。`qubit-rayon-executor 0.9.0` wrapper 析构时不会调用显式 shutdown 或 stop；Rayon pool 值析构会发出终止信号，现有工作完成后 worker 才会逐步退出，但 facade 不会等待。解析到的 `qubit-tokio-executor 0.12.0` blocking 和 IO service wrapper 没有会取消已接收任务的析构实现；丢弃 facade 不会 abort Tokio blocking 任务或 IO future。这些逐域行为不能组成统一的完成保证；如果必须在释放资源前等已接收工作完成，应调用 `shutdown()` 并等待 `await_termination()`，再丢弃 facade。
 
@@ -69,7 +69,7 @@ wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第�
 
 ## 下游集成
 
-IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取消时，rollback 使用 `stop()` 关闭准入，不等待可能无限期占用服务的业务任务。异步 build 失败会运行每个 managed wait 回调并验证服务终止。如果 build future 本身被取消，会同步调用 stop 回调；由于被丢弃的 build 无法驱动异步 wait 回调，fixture 在 build 之外等待服务结束。
+IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取消时，rollback 使用 `stop()` 关闭准入，不等待已运行的同步业务任务自然结束。但 `stop()` 可能在调用线程同步清理排队任务，且清理没有固定耗时上限。现有仅启用 IO 的 fixture 不能证明包含 CPU 或 blocking 域的组合具有有界 stop 耗时。异步 build 失败会运行每个 managed wait 回调并验证服务终止。如果 build future 本身被取消，会同步调用 stop 回调；由于被丢弃的 build 无法驱动异步 wait 回调，fixture 在 build 之外等待服务结束。
 
 正常应用关闭顺序不同：先停止生产者，再调用 `ExecutionServices::shutdown()`，在 Tokio runtime 仍运行时等待服务终止，最后关闭 IoC context。cleanup 时重复 stop 不会重新开放准入。
 
@@ -79,7 +79,7 @@ IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取�
 
 集成测试通过公共 API 检查错误优先级、四域容量等待、多个等待者竞争、丢弃未接收任务、关闭唤醒以及同域嵌套等待。测试会固定已 pin 的 future，在独立 gate 仍占用容量时显式 poll 一次并断言 `Pending`；timeout 只用于发现测试卡死。
 
-应用 consumer 和可运行资源预算示例也会在释放已接收任务前 poll 等待 future。本地文档 consumer 检查 sibling checkout 布局和 Tokio feature；它会解析本仓库 `.cargo/config.toml` 中的 patch，因此不属于 registry 隔离验证。[发布包文档 consumer workflow](../.github/workflows/packaged-documentation-consumer.yml) 包含两个独立 job，都会打包 crate、将归档解压到源码树外，并从归档读取 `quick_start.rs` 和完整的 `daily_report.rs` 来构建、运行消费者。源码集成 job 检出 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor` 最新的 `dev-starfish` 源码，仅允许这三个本地 executor 包与消费者、归档目标包作为本地包；其他包都必须有 `registry+` 来源。registry-only job 运行 `python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only`，移除继承的 Cargo 覆盖变量，使用隔离的 Cargo home 和 target 目录，固定 crates.io 来源，拒绝归档 manifest 中的 path/git/patch 输入，并且只允许消费者和解压目标 crate 为本地包。两种模式都要求解压目标包 `source=None` 且 manifest 路径精确指向归档，并校验消费者的预期名称和 manifest 路径。初次解析生成 consumer 锁文件后，验证器使用 `cargo metadata --locked` 检查 metadata，再用 `cargo run --locked`，使来源检查和实际运行共享同一锁文件。源码集成检查允许三个 executor crate 使用本地覆盖；registry-only 检查在必需 registry 依赖不可用时失败。发布验收须同时通过两项检查。两项检查均不证明最小 semver 兼容性，也不代表生产项目已经采用。独立 IoC CI job 会使用固定依赖运行 consumer、测试和 Clippy，不混入核心 crate 的 feature matrix。
+应用 consumer 和可运行资源预算示例也会在释放已接收任务前 poll 等待 future。本地文档 consumer 检查 sibling checkout 布局和 Tokio feature；它会解析本仓库 `.cargo/config.toml` 中的 patch，因此不属于 registry 隔离验证。[发布包文档 consumer workflow](../.github/workflows/packaged-documentation-consumer.yml) 包含两个独立 job，都会打包 crate、将归档解压到源码树外，并从归档读取 `quick_start.rs` 和完整的 `daily_report.rs` 来构建、运行消费者。源码集成 job 检出 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor` 最新的 `dev-starfish` 源码，仅允许这三个本地 executor 包与消费者、归档目标包作为本地包；其他包都必须有 `registry+` 来源。registry-only job 运行 `python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only`，移除继承的 Cargo 覆盖变量，使用隔离的 Cargo home 和 target 目录，固定 crates.io 来源，拒绝归档 manifest 中的 path/git/patch 输入，并且只允许消费者和解压目标 crate 为本地包。两种模式都要求解压目标包 `source=None` 且 manifest 路径精确指向归档，并校验消费者的预期名称和 manifest 路径。初次解析生成 consumer 锁文件后，验证器使用 `cargo metadata --locked` 检查 metadata，再用 `cargo run --locked`，使来源检查和实际运行共享同一锁文件。源码集成检查允许三个 executor crate 使用本地覆盖；registry-only 检查在必需 registry 依赖不可用时失败。发布验收须同时通过两项检查。registry-only job 还会在独立矩阵项中检查 manifest 声明的 Rayon 下界对应的精确 crates.io 版本；它只证明该 Rayon 版本与本次解析出的其他依赖组合兼容，不证明所有传递依赖同时处于最低版本。两项检查均不代表生产项目已经采用。独立 IoC CI job 会使用固定依赖运行 consumer、测试和 Clippy，不混入核心 crate 的 feature matrix。
 
 中英文用户指南描述相同的错误、所有权、取消和容量契约。可运行示例与 Cargo 打包文件清单验证文档代码可执行且设计文档进入 crate 发布包。
 
