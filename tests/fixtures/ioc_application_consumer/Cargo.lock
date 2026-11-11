@@ -413,7 +413,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-local-files"
-version = "0.5.1"
+version = "0.5.0"
 dependencies = [
  "getrandom",
  "libc",
@@ -448,9 +448,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-redact"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9c65d2bde4f93927eedadf7d86ab7d6303004dbb6995bbce63250297033bf342"
+version = "0.10.0"
 dependencies = [
  "fluent-uri",
  "qubit-budget",
