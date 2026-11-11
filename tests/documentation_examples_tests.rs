@@ -187,3 +187,18 @@ fn test_design_distinguishes_manual_and_ioc_shutdown_ownership() {
     }
     assert!(GRACEFUL_FLUSH_WORKER.contains("Managed::asynchronous_with_graceful"));
 }
+
+#[test]
+fn test_workflow_links_remain_usable_outside_the_checkout() {
+    let prefix = "https://github.com/qubit-ltd/rs-execution-services/blob/main/.github/workflows/";
+    for document in [ENGLISH_README, CHINESE_README, ENGLISH_DESIGN, CHINESE_DESIGN] {
+        assert!(!document.contains("](.github/workflows/"));
+        assert!(!document.contains("](../.github/workflows/"));
+        assert!(document.contains(&format!("{prefix}packaged-documentation-consumer.yml)")));
+    }
+    for document in [ENGLISH_DESIGN, CHINESE_DESIGN] {
+        for workflow in ["ci.yml", "ioc-current-integration.yml"] {
+            assert!(document.contains(&format!("{prefix}{workflow})")));
+        }
+    }
+}
