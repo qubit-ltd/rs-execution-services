@@ -66,7 +66,7 @@ wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第�
 
 正常成功或返回错误时，应保留操作结果，同时请求 graceful shutdown 并等待终止。如果需要强制停止或 Tokio abort，同步清理可以在任务取消/析构路径中执行；异步清理必须由仍存活的所有者驱动，完成后才能释放所需资源。future 一旦取消，便不能恢复后再执行异步清理等待。单独丢弃 `await_termination()` future 只会取消本次等待；仍存活的所有者可以再次等待。Tokio runtime 应持续运行，直到其已接收工作及所需清理都完成。
 
-容量为 1 的 IO 任务若在同一个已满 IO 域中等待子任务，会形成等待环：父任务占据唯一接收名额，子任务则等待名额释放。应将编排放到该域外；独立工作可使用不同域；若确需同域等待，应明确分析依赖深度和容量。单纯增加容量不能证明任意递归等待都安全。门面不检测依赖环，也不创建备用 worker。
+父任务返回前始终计入未完成任务容量。CPU 或 Tokio blocking 的容量为 1 时，父任务同步等待同域子任务提交会形成等待环，即使还有空闲 worker：子任务要等父任务释放名额才能获接纳，父任务又要等子任务接纳并完成才能返回。IO 容量为 1 时，父任务等待子任务提交也会占着唯一已接纳 future 名额。blocking 使用不同的队列容量口径：队列上限只统计等待任务，运行任务由 worker 数量限制。应把编排放到域外；独立工作可使用不同域；若确需同域等待，应明确分析 worker 可用量、任务容量和依赖深度。单纯增加 worker 或容量不能证明任意递归等待都安全。门面不检测依赖环，也不创建备用 worker。
 
 ## 下游集成
 
@@ -78,7 +78,7 @@ IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取�
 
 ## 验证
 
-集成测试通过公共 API 检查错误优先级、四域容量等待、多个等待者竞争、丢弃未接收任务、关闭唤醒以及同域嵌套等待。测试会固定已 pin 的 future，在独立 gate 仍占用容量时显式 poll 一次并断言 `Pending`；timeout 只用于发现测试卡死。
+集成测试通过公共 API 检查错误优先级、四域容量等待、多个等待者竞争、丢弃未接收任务、关闭唤醒以及同域嵌套等待。IO、CPU 和 Tokio blocking 的容量为 1 父子案例会 poll 子任务等待一次并断言 `Pending`；CPU 与 Tokio blocking 案例配置额外 worker，以证明任务容量本身也会限制接纳。后两者由域外 shutdown 唤醒父任务，并检查子任务从未执行。timeout 只用于发现测试卡死，不作为容量等待环的证据。
 
 应用 consumer 和可运行资源预算示例也会在释放已接收任务前 poll 等待 future。本地文档 consumer 检查 sibling checkout 布局和 Tokio feature；它会解析本仓库 `.cargo/config.toml` 中的 patch，因此不属于 registry 隔离验证。[发布包文档 consumer workflow](../.github/workflows/packaged-documentation-consumer.yml) 包含两个独立 job，都会打包 crate、将归档解压到源码树外，并从归档读取 `quick_start.rs` 和完整的 `daily_report.rs` 来构建、运行消费者。源码集成 job 检出 `rs-tokio-executor`、`rs-rayon-executor` 和 `rs-executor` 最新的 `dev-starfish` 源码，仅允许这三个本地 executor 包与消费者、归档目标包作为本地包；其他包都必须有 `registry+` 来源。registry-only job 运行 `python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only`，移除继承的 Cargo 覆盖变量，使用隔离的 Cargo home 和 target 目录，固定 crates.io 来源，拒绝归档 manifest 中的 path/git/patch 输入，并且只允许消费者和解压目标 crate 为本地包。两种模式都要求解压目标包 `source=None` 且 manifest 路径精确指向归档，并校验消费者的预期名称和 manifest 路径。初次解析生成 consumer 锁文件后，验证器使用 `cargo metadata --locked` 检查 metadata，再用 `cargo run --locked`，使来源检查和实际运行共享同一锁文件。源码集成检查允许三个 executor crate 使用本地覆盖；registry-only 检查在必需 registry 依赖不可用时失败。发布验收须同时通过两项检查。registry-only job 还会在独立矩阵项中检查 manifest 声明的 Rayon 下界对应的精确 crates.io 版本；它只证明该 Rayon 版本与本次解析出的其他依赖组合兼容，不证明所有传递依赖同时处于最低版本。两项检查均不代表生产项目已经采用。独立 IoC CI job 会使用固定依赖运行 consumer、测试和 Clippy，不混入核心 crate 的 feature matrix。
 

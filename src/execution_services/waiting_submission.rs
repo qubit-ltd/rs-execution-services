@@ -85,9 +85,13 @@ impl ExecutionServices {
     /// accepted task.
     ///
     /// A parent task can prevent a same-domain child from running if it waits
-    /// for that child while occupying the worker the child needs. Keep such
-    /// orchestration outside the CPU domain or account for worker availability
-    /// and dependency depth.
+    /// for that child while occupying the worker the child needs. The parent
+    /// also occupies unfinished-task capacity until it returns. With capacity
+    /// one, waiting for a same-domain child submission prevents progress even
+    /// when additional workers are available. Keep orchestration outside the
+    /// CPU domain, or explicitly account for worker availability, task capacity,
+    /// and dependency depth. More workers or capacity alone do not make
+    /// arbitrary recursive dependencies safe.
     ///
     /// # Type Parameters
     ///
@@ -150,8 +154,12 @@ impl ExecutionServices {
     ///
     /// A parent task can prevent a same-domain child from running if it waits
     /// for that child while occupying a Tokio blocking worker the child needs.
-    /// Keep such orchestration outside the blocking pool or account for worker
-    /// availability and dependency depth.
+    /// The parent also occupies unfinished-task capacity until it returns. With
+    /// capacity one, waiting for a same-domain child submission prevents
+    /// progress even when additional workers are available. Keep orchestration
+    /// outside the blocking pool, or explicitly account for worker availability,
+    /// task capacity, and dependency depth. More workers or capacity alone do
+    /// not make arbitrary recursive dependencies safe.
     ///
     /// Capacity notifications are advisory: another submitter may use an
     /// available slot before this method retries. No FIFO or bounded-wait

@@ -1759,3 +1759,96 @@ async fn test_io_parent_waiting_on_same_full_domain_remains_pending() {
         .expect("stopped IO service should terminate");
     assert!(services.is_terminated());
 }
+
+async fn assert_parent_capacity_one_blocks_child(cpu: bool) {
+    let runtime = Handle::current();
+    let builder = ExecutionServices::builder().runtime(runtime.clone());
+    let services = Arc::new(
+        if cpu {
+            builder.enable_cpu().cpu_threads(2).cpu_task_capacity(1).build()
+        } else {
+            builder
+                .enable_tokio_blocking()
+                .tokio_blocking_task_capacity(NonZeroUsize::new(1).expect("capacity is nonzero"))
+                .build()
+        }
+        .expect("services should build"),
+    );
+    let child_runs = Arc::new(AtomicUsize::new(0));
+    let child_services = Arc::clone(&services);
+    let runs = Arc::clone(&child_runs);
+    let (pending_tx, pending_rx) = oneshot::channel();
+    let mut parent_work = Some(move || {
+        runtime.block_on(async move {
+            let child = move || {
+                runs.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), io::Error>(())
+            };
+            let mut wait: Pin<
+                Box<
+                    dyn Future<
+                            Output = Result<
+                                qubit_executor::TaskHandle<(), io::Error>,
+                                ExecutionServicesSubmissionError,
+                            >,
+                        > + Send,
+                >,
+            > = if cpu {
+                Box::pin(child_services.submit_cpu_callable_wait(child))
+            } else {
+                Box::pin(child_services.submit_tokio_blocking_callable_wait(child))
+            };
+            let pending = poll_once(wait.as_mut()).await.is_pending();
+            let _ = pending_tx.send(pending);
+            let rejected = timeout(TEST_TIMEOUT, wait).await.map_err(io::Error::other)?;
+            assert!(matches!(
+                rejected,
+                Err(ExecutionServicesSubmissionError::Rejected {
+                    source: SubmissionError::Shutdown
+                })
+            ));
+            Ok::<(), io::Error>(())
+        })
+    });
+    let parent = move || parent_work.take().expect("parent should execute once")();
+    let parent_handle = if cpu {
+        services.submit_cpu_callable(parent)
+    } else {
+        services.submit_tokio_blocking_callable(parent)
+    }
+    .expect("parent should be accepted");
+
+    let observed = timeout(TEST_TIMEOUT, pending_rx).await;
+    let snapshot = services.snapshot();
+    services.shutdown();
+    timeout(TEST_TIMEOUT, parent_handle)
+        .await
+        .expect("parent should exit after shutdown")
+        .expect("parent should return successfully");
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate");
+
+    assert!(observed.expect("parent should report").expect("report should arrive"));
+    let capacity = if cpu {
+        snapshot.cpu.expect("CPU should be enabled").task_capacity
+    } else {
+        snapshot
+            .tokio_blocking
+            .expect("Tokio blocking should be enabled")
+            .task_capacity
+    };
+    assert_eq!(capacity, 1);
+    assert_eq!(child_runs.load(Ordering::SeqCst), 0);
+    assert!(services.is_terminated());
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_cpu_parent_capacity_one_blocks_child_with_spare_workers() {
+    assert_parent_capacity_one_blocks_child(true).await;
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_tokio_blocking_parent_capacity_one_blocks_child_with_spare_workers() {
+    assert_parent_capacity_one_blocks_child(false).await;
+}

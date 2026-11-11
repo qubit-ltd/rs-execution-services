@@ -366,7 +366,7 @@ Ok(save.await?)
 
 facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
 
-三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。同步域的父任务若等待同域子任务，可能占用子任务需要的 worker；IO 容量为 1 时，父任务等待同域子任务会占着唯一容量，导致子任务无法获接纳。应把编排逻辑放在域外，或明确核算 worker 可用量、依赖深度和容量；详见[容量等待设计](design.zh_CN.md#容量等待算法)。
+三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。父任务等待同域子任务时，可能同时占用子任务需要的 worker 和未完成任务容量。CPU 或 Tokio blocking 的任务容量为 1 时，即使还有空闲 worker，父任务等待子任务提交也无法推进。IO 容量为 1 时，父任务等待同域子任务会占着唯一已接纳 future 名额，导致子任务无法获接纳。blocking 使用不同的队列容量口径：队列上限只统计等待任务，运行任务由 worker pool 限制。应把编排逻辑放在域外，或明确核算 worker 可用量、任务容量和依赖深度；详见[容量等待设计](design.zh_CN.md#容量等待算法)。单纯增加 worker 或容量不能证明任意递归依赖都安全。
 
 用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 
