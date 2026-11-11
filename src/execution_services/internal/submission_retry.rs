@@ -10,6 +10,7 @@
 use qubit_executor::service::SubmissionError;
 use tokio::sync::watch::Receiver;
 
+use super::capacity_change_receiver::CapacityChangeReceiver;
 use super::execution_services_admission::ExecutionServicesAdmission;
 use crate::ExecutionServicesSubmissionError;
 
@@ -40,10 +41,45 @@ use crate::ExecutionServicesSubmissionError;
 /// native submission errors immediately.
 pub(crate) async fn retry_submission<H, F>(
     admission: &ExecutionServicesAdmission,
-    mut changes: Receiver<u64>,
+    changes: Receiver<u64>,
+    attempt: F,
+) -> Result<H, ExecutionServicesSubmissionError>
+where
+    H: Send,
+    F: FnMut() -> Result<H, SubmissionError> + Send,
+{
+    retry_submission_with_changes(admission, changes, attempt).await
+}
+
+/// Shared retry loop for native capacity notification sources.
+///
+/// # Type Parameters
+///
+/// * `C` - Capacity notification source used between attempts.
+/// * `H` - Native handle returned after a submission is accepted.
+/// * `F` - Reusable closure that performs one native submission attempt.
+///
+/// # Parameters
+///
+/// * `admission` - Facade gate checked before each native submission.
+/// * `changes` - Subscribed notification source used after saturation.
+/// * `attempt` - Closure submitting one retryable wrapper to the domain.
+///
+/// # Returns
+///
+/// The native handle for the accepted submission.
+///
+/// # Errors
+///
+/// Returns Shutdown if admission closes or the notification source closes;
+/// returns other native submission errors immediately.
+pub(crate) async fn retry_submission_with_changes<C, H, F>(
+    admission: &ExecutionServicesAdmission,
+    mut changes: C,
     mut attempt: F,
 ) -> Result<H, ExecutionServicesSubmissionError>
 where
+    C: CapacityChangeReceiver,
     H: Send,
     F: FnMut() -> Result<H, SubmissionError> + Send,
 {

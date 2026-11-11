@@ -11,7 +11,6 @@ use std::future::Future;
 
 use qubit_executor::TaskHandle;
 use qubit_executor::service::ExecutorService;
-use qubit_executor::service::SubmissionError;
 use qubit_tokio_executor::TokioTaskHandle;
 
 use super::super::ExecutionDomain;
@@ -19,6 +18,7 @@ use super::super::ExecutionServicesSubmissionError;
 use super::ExecutionServices;
 use super::internal::owned_wait_task::OwnedWaitTask;
 use super::internal::submission_retry::retry_submission;
+use super::internal::submission_retry::retry_submission_with_changes;
 
 impl ExecutionServices {
     /// Submits a blocking callable, waiting and retrying when its queue is
@@ -124,26 +124,19 @@ impl ExecutionServices {
             let mut task = Some(task);
             move || task.take().expect("CPU wait task executes once")()
         });
-        let mut changes = service.capacity_changes();
-        loop {
-            match self.admission.admit(|| {
-                let callable_attempt = callable.take().expect("CPU wait task remains available until accepted");
-                match service.try_submit_callable(callable_attempt) {
-                    Ok(handle) => Ok(handle),
-                    Err(rejected) => {
-                        let (reason, callable_attempt) = rejected.into_parts();
-                        callable = Some(callable_attempt);
-                        Err(reason)
-                    }
+        let changes = service.capacity_changes();
+        retry_submission_with_changes(&self.admission, changes, || {
+            let callable_attempt = callable.take().expect("CPU wait task remains available until accepted");
+            match service.try_submit_callable(callable_attempt) {
+                Ok(handle) => Ok(handle),
+                Err(rejected) => {
+                    let (reason, callable_attempt) = rejected.into_parts();
+                    callable = Some(callable_attempt);
+                    Err(reason)
                 }
-            }) {
-                Ok(handle) => return Ok(handle),
-                Err(SubmissionError::Saturated) => {
-                    changes.changed().await.map_err(|_| SubmissionError::Shutdown)?;
-                }
-                Err(error) => return Err(error.into()),
             }
-        }
+        })
+        .await
     }
 
     /// Submits a Tokio blocking callable, waiting and retrying when capacity is
@@ -201,28 +194,21 @@ impl ExecutionServices {
             let mut task = Some(task);
             move || task.take().expect("Tokio blocking wait task executes once")()
         });
-        let mut changes = service.capacity_changes();
-        loop {
-            match self.admission.admit(|| {
-                let callable_attempt = callable
-                    .take()
-                    .expect("Tokio blocking wait task remains available until accepted");
-                match service.try_submit_callable(callable_attempt) {
-                    Ok(handle) => Ok(handle),
-                    Err(rejected) => {
-                        let (reason, callable_attempt) = rejected.into_parts();
-                        callable = Some(callable_attempt);
-                        Err(reason)
-                    }
+        let changes = service.capacity_changes();
+        retry_submission(&self.admission, changes, || {
+            let callable_attempt = callable
+                .take()
+                .expect("Tokio blocking wait task remains available until accepted");
+            match service.try_submit_callable(callable_attempt) {
+                Ok(handle) => Ok(handle),
+                Err(rejected) => {
+                    let (reason, callable_attempt) = rejected.into_parts();
+                    callable = Some(callable_attempt);
+                    Err(reason)
                 }
-            }) {
-                Ok(handle) => return Ok(handle),
-                Err(SubmissionError::Saturated) => {
-                    changes.changed().await.map_err(|_| SubmissionError::Shutdown)?;
-                }
-                Err(error) => return Err(error.into()),
             }
-        }
+        })
+        .await
     }
 
     /// Submits an IO future, waiting and retrying when accepted-future capacity
@@ -276,25 +262,18 @@ impl ExecutionServices {
     {
         let service = self.admission.resolve_domain(ExecutionDomain::Io, self.io.as_ref())?;
         let mut future = Some(future);
-        let mut changes = service.capacity_changes();
-        loop {
-            match self.admission.admit(|| {
-                let future_attempt = future.take().expect("IO wait future remains available until accepted");
-                match service.try_spawn(future_attempt) {
-                    Ok(handle) => Ok(handle),
-                    Err(rejected) => {
-                        let (reason, future_attempt) = rejected.into_parts();
-                        future = Some(future_attempt);
-                        Err(reason)
-                    }
+        let changes = service.capacity_changes();
+        retry_submission(&self.admission, changes, || {
+            let future_attempt = future.take().expect("IO wait future remains available until accepted");
+            match service.try_spawn(future_attempt) {
+                Ok(handle) => Ok(handle),
+                Err(rejected) => {
+                    let (reason, future_attempt) = rejected.into_parts();
+                    future = Some(future_attempt);
+                    Err(reason)
                 }
-            }) {
-                Ok(handle) => return Ok(handle),
-                Err(SubmissionError::Saturated) => {
-                    changes.changed().await.map_err(|_| SubmissionError::Shutdown)?;
-                }
-                Err(error) => return Err(error.into()),
             }
-        }
+        })
+        .await
     }
 }
