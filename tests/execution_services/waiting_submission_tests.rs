@@ -49,6 +49,20 @@ impl Drop for DropCounter {
     }
 }
 
+struct CleanupProbe {
+    entered: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    drops: Arc<AtomicUsize>,
+}
+
+impl Drop for CleanupProbe {
+    fn drop(&mut self) {
+        self.drops.fetch_add(1, Ordering::SeqCst);
+        self.entered.send(()).expect("cleanup observer should be listening");
+        self.release.recv().expect("cancelled capture cleanup gate should open");
+    }
+}
+
 struct PollCounterFuture {
     polls: Arc<AtomicUsize>,
     _drop_counter: DropCounter,
@@ -1598,7 +1612,7 @@ async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once
     let running = services
         .submit_cpu_callable(move || {
             started_tx.send(()).unwrap();
-            release_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+            release_rx.recv().expect("CPU capacity blocker gate should open");
             finished_tx.send(()).unwrap();
             Ok::<(), io::Error>(())
         })
@@ -1632,6 +1646,117 @@ async fn test_cancelling_a_full_cpu_capacity_wait_drops_the_unaccepted_task_once
         .await
         .expect("running task should finish before the diagnostic timeout")
         .unwrap();
+    services.shutdown();
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("CPU service should terminate");
+}
+
+#[tokio_test]
+async fn test_cpu_wait_keeps_capacity_until_cancelled_capture_cleanup_finishes() {
+    let services = ExecutionServices::builder()
+        .enable_cpu()
+        .cpu_threads(1)
+        .cpu_task_capacity(2)
+        .build()
+        .unwrap();
+
+    let (a_started_tx, a_started_rx) = mpsc::channel();
+    let (a_release_tx, a_release_rx) = mpsc::channel();
+    let mut a_gate = GateRelease(Some(a_release_tx));
+    let a = services
+        .submit_cpu_callable(move || {
+            a_started_tx.send(()).unwrap();
+            a_release_rx.recv().expect("running task A gate should open");
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    a_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("task A should occupy the CPU worker");
+
+    let drops = Arc::new(AtomicUsize::new(0));
+    let (cleanup_entered_tx, cleanup_entered_rx) = mpsc::channel();
+    let (cleanup_release_tx, cleanup_release_rx) = mpsc::channel();
+    let mut cleanup_gate = GateRelease(Some(cleanup_release_tx));
+    let probe = CleanupProbe {
+        entered: cleanup_entered_tx,
+        release: cleanup_release_rx,
+        drops: Arc::clone(&drops),
+    };
+    let b_calls = Arc::new(AtomicUsize::new(0));
+    let b_call_count = Arc::clone(&b_calls);
+    let b = services
+        .submit_tracked_cpu_callable({
+            let mut probe = Some(probe);
+            move || {
+                let _probe = probe.take();
+                b_call_count.fetch_add(1, Ordering::SeqCst);
+                Ok::<(), io::Error>(())
+            }
+        })
+        .unwrap();
+
+    let cancellation = b.cancellation_handle();
+    let (cancel_done_tx, cancel_done_rx) = mpsc::channel();
+    let cancel_thread = std::thread::spawn(move || {
+        let result = cancellation.cancel();
+        let _ = cancel_done_tx.send(result);
+    });
+    cleanup_entered_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("cancelled capture cleanup should begin");
+
+    let cpu = services.snapshot().cpu.expect("CPU domain should be enabled");
+    assert_eq!(cpu.running, 1);
+    assert_eq!(cpu.queued, 0);
+    assert_eq!(cpu.cancelling, 1);
+    assert!(matches!(
+        services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            domain: ExecutionDomain::Cpu,
+            source: SubmissionError::Saturated,
+        })
+    ));
+
+    let c_calls = Arc::new(AtomicUsize::new(0));
+    let c_call_count = Arc::clone(&c_calls);
+    let mut c_wait = Box::pin(services.submit_cpu_callable_wait(move || {
+        c_call_count.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), io::Error>(())
+    }));
+    assert!(poll_once(c_wait.as_mut()).await.is_pending());
+    assert_eq!(c_calls.load(Ordering::SeqCst), 0);
+
+    cleanup_gate.release();
+    assert_eq!(
+        cancel_done_rx
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("cancellation should finish after capture cleanup"),
+        qubit_executor::CancelResult::Cancelled
+    );
+    cancel_thread.join().expect("cancellation thread should not panic");
+
+    let c = timeout(TEST_TIMEOUT, &mut c_wait)
+        .await
+        .expect("wait C should be accepted after cleanup releases capacity")
+        .expect("CPU wait should be accepted");
+    assert_eq!(c_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(services.snapshot().cpu.unwrap().queued, 1);
+
+    a_gate.release();
+    timeout(TEST_TIMEOUT, a)
+        .await
+        .expect("task A should finish after its gate opens")
+        .unwrap();
+    timeout(TEST_TIMEOUT, c)
+        .await
+        .expect("task C should finish after task A releases the worker")
+        .unwrap();
+
+    assert_eq!(b_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(c_calls.load(Ordering::SeqCst), 1);
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
     services.shutdown();
     timeout(TEST_TIMEOUT, services.await_termination())
         .await

@@ -351,7 +351,7 @@ With `blocking_unbounded_queue()`, work continues to queue after the core size i
 
 ### CPU task capacity
 
-`cpu_threads(n)` configures Rayon worker count. `cpu_task_capacity(n)` limits the total number of accepted CPU tasks that have not finished, including running and queued work. A submission made at capacity returns `SubmissionError::Saturated`; when accepted work finishes or a queued tracked task is cancelled, capacity can become available again.
+`cpu_threads(n)` configures Rayon worker count. `cpu_task_capacity(n)` limits accepted CPU tasks whose service-side accounting has not been released. Queued, running, and cancelling tasks all occupy capacity. An observable terminal result does not prove that captured-value cleanup or capacity release has completed. A submission made at capacity returns `SubmissionError::Saturated`; a wait may remain pending during synchronous cleanup and competes again after cleanup releases capacity and sends a capacity-change notification. Notifications do not reserve capacity, and no FIFO, fairness, or bounded-wait guarantee is provided.
 
 ### Tokio task capacities
 
@@ -369,7 +369,7 @@ After acceptance, the three synchronous wait methods return `TaskHandle`, which 
 
 Size capacities from measurements. Record peak arrival rate, task service time, and the maximum queue delay the application can tolerate. Estimate each domain's in-flight demand from arrival rate multiplied by service time, then add a documented burst margin. For blocking work, size worker counts for simultaneous blocking calls and size the finite queue separately for the permitted backlog. For CPU work, start from available parallelism and bound accepted in-flight work to limit queued memory and delay. For Tokio blocking work, configure the facade's accepted-task capacity separately from the runtime's shared `max_blocking_threads`; account for other users of that runtime pool. For IO, estimate concurrent futures and their retained memory. Load test the chosen limits, inspect per-domain snapshots and `Saturated` results, and adjust from observed latency and backlog. Snapshots are observational samples and do not reserve admission capacity.
 
-`snapshot()` gathers optional stats from enabled domains. It is a collection of independent samples: the fields do not share one instant and must not be summed or used to synchronize submissions. For the IO domain, `accepted_unfinished` includes accepted futures that have not yet been polled. `ThreadPoolStats::queue_capacity` reports the configured queue limit, with `None` for an unbounded queue.
+`snapshot()` gathers optional stats from enabled domains. It is a collection of independent samples: the fields do not share one instant and must not be summed or used to synchronize submissions. CPU stats include queued, running, and cancelling tasks whose service-side accounting has not been released; a terminal result may be observable before cleanup and capacity release finish. For the IO domain, `accepted_unfinished` includes accepted futures that have not yet been polled. `ThreadPoolStats::queue_capacity` reports the configured queue limit, with `None` for an unbounded queue.
 
 ### Tokio runtime ownership
 

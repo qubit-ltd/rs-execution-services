@@ -37,7 +37,10 @@ pub struct ExecutionServicesSnapshot {
     /// blocking domain is disabled.
     pub blocking: Option<ThreadPoolStats>,
     /// `Some` contains the CPU executor snapshot; `None` means the CPU domain
-    /// is disabled.
+    /// is disabled. Its queued, running, and cancelling counts include tasks
+    /// whose service-side accounting has not been released. A terminal result
+    /// may be observable before captured-value cleanup and capacity release
+    /// finish; the snapshot is not a reservation of capacity.
     pub cpu: Option<RayonExecutorServiceStats>,
     /// `Some` contains the Tokio blocking executor snapshot; `None` means the
     /// Tokio blocking domain is disabled.

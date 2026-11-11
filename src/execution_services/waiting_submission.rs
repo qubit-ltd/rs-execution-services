@@ -85,6 +85,12 @@ impl ExecutionServices {
     /// [`TaskHandle`] for observing the result. This handle does not cancel the
     /// accepted task.
     ///
+    /// Capacity remains occupied by queued, running, and cancelling CPU tasks
+    /// until service-side accounting is released. Captured-value cleanup can
+    /// therefore keep this future pending even after a terminal result is
+    /// observable; the future competes again after a capacity-change
+    /// notification and has no FIFO or bounded-wait guarantee.
+    ///
     /// A parent task can prevent a same-domain child from running if it waits
     /// for that child while occupying the worker the child needs. The parent
     /// also occupies unfinished-task capacity until it returns. With capacity

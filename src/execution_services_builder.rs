@@ -422,7 +422,12 @@ impl ExecutionServicesBuilder {
         self
     }
 
-    /// Sets the maximum number of accepted unfinished CPU tasks.
+    /// Sets the maximum number of accepted CPU tasks whose service-side
+    /// accounting has not been released.
+    ///
+    /// Queued, running, and cancelling tasks all consume capacity. An
+    /// observable terminal result does not prove that captured-value cleanup
+    /// or capacity release has completed.
     ///
     /// # Parameters
     ///

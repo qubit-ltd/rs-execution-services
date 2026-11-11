@@ -339,7 +339,7 @@ let services = ExecutionServices::builder()
 
 ### CPU 任务容量
 
-`cpu_threads(n)` 配置 Rayon worker 数量。`cpu_task_capacity(n)` 限制已接收但尚未结束的 CPU 任务总数，其中包括正在运行和等待执行的任务。达到容量时，新提交会返回 `SubmissionError::Saturated`。已接收任务完成，或排队中的 tracked task 被取消后，容量可以重新释放。
+`cpu_threads(n)` 配置 Rayon worker 数量。`cpu_task_capacity(n)` 限制服务端记账尚未释放的已接收 CPU 任务。排队、运行和取消处理中（cancelling）的任务都会占用容量。终态结果可见，不代表捕获值清理或容量释放已完成；同步析构清理期间，立即提交仍可能返回 `SubmissionError::Saturated`，wait 也可能保持 Pending。清理完成、服务端释放记账并发送容量变化通知后，wait 才重新竞争容量。通知不会预留名额，系统不保证 FIFO、公平性或有界等待。
 
 ### Tokio 任务容量
 
@@ -368,7 +368,7 @@ facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop
 
 三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。父任务等待同域子任务时，可能同时占用子任务需要的 worker 和未完成任务容量。CPU 或 Tokio blocking 的任务容量为 1 时，即使还有空闲 worker，父任务等待子任务提交也无法推进。IO 容量为 1 时，父任务等待同域子任务会占着唯一已接纳 future 名额，导致子任务无法获接纳。blocking 使用不同的队列容量口径：队列上限只统计等待任务，运行任务由 worker pool 限制。应把编排逻辑放在域外，或明确核算 worker 可用量、任务容量和依赖深度；详见[容量等待设计](design.zh_CN.md#容量等待算法)。单纯增加 worker 或容量不能证明任意递归依赖都安全。
 
-用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
+用 `services.snapshot()` 可以按启用域观察积压。未启用域字段为 `None`；CPU 统计包括服务端记账尚未释放的排队、运行和取消处理中任务，终态结果可见时清理与容量释放仍可能未完成；IO 域的 `accepted_unfinished` 包括已接纳但尚未 poll 的 future。`ThreadPoolStats::queue_capacity` 是配置的等待队列上限，无界队列为 `None`。各域统计独立采样，不对应同一时刻，不能相加或用于同步提交；真正的准入结果仍以提交方法的返回值为准。
 
 ### Tokio runtime 的归属
 

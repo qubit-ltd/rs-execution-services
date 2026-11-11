@@ -47,7 +47,7 @@ Capacity notifications are advisory: they indicate a state change, not a reserva
 
 For blocking, `OwnedWaitTask` holds `Option<C>` behind a mutex shared with attempt wrappers. A rejected wrapper leaves the callable in the slot; an accepted wrapper takes it when executed. The other domains recover the original task directly from the native rejection value and retain it across retries. No path requires `Clone`, and a one-shot task is submitted for execution at most once.
 
-Capacity limits count accepted work only. Waiters that have not been accepted are not included in `accepted_unfinished` snapshots or task-capacity limits, even though their futures retain user data. Applications that need a memory bound must limit concurrent producers or add application-level timeouts/backpressure.
+Capacity limits count accepted work only. Waiters that have not been accepted are not included in `accepted_unfinished` snapshots or task-capacity limits, even though their futures retain user data. Applications that need a memory bound must limit concurrent producers or add application-level timeouts/backpressure. In the CPU domain, queued, running, and cancelling tasks all occupy capacity until service-side accounting is released. Captured-value cleanup for a cancelled queued task can therefore keep capacity occupied after a terminal result becomes observable; an immediate submission can still be saturated and a wait can remain pending. Cleanup completion releases accounting and sends a capacity-change notification, after which waiters compete again without FIFO, fairness, or bounded-wait guarantees. CPU snapshot counts expose queued, running, and cancelling states but do not reserve a slot.
 
 ## Cancellation and lifecycle
 
