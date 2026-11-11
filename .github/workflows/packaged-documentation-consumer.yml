@@ -44,6 +44,10 @@ jobs:
 
   registry-consumers:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rayon: [latest, minimum]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -71,4 +75,21 @@ jobs:
         run: python3 .infra/tools/check-packaged-documentation-consumer.py --self-test
       - name: Verify archived consumers with registry dependencies
         working-directory: rs-execution-services
-        run: python3 .infra/tools/check-packaged-documentation-consumer.py --registry-only
+        env:
+          RAYON_CHECK_MODE: ${{ matrix.rayon }}
+        run: |
+          python3 - <<'PYTHON'
+          import os
+          from pathlib import Path
+          import runpy
+          import subprocess
+          import sys
+
+          verifier = Path('.infra/tools/check-packaged-documentation-consumer.py')
+          command = [sys.executable, str(verifier), '--registry-only']
+          if os.environ['RAYON_CHECK_MODE'] == 'minimum':
+              helpers = runpy.run_path(str(verifier))
+              lower = helpers['_rayon_lower_bound'](Path('Cargo.toml'))
+              command.extend(['--rayon-version', lower])
+          subprocess.run(command, check=True)
+          PYTHON
