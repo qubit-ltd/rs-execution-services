@@ -30,4 +30,5 @@ impl Drop for GateRelease {
 }
 
 mod submission_tests;
+mod termination_wait_tests;
 mod waiting_submission_tests;

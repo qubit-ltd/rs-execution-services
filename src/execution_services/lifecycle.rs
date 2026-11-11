@@ -161,6 +161,10 @@ impl ExecutionServices {
     /// tasks are running.
     /// Request shutdown or stop before awaiting termination; this method only
     /// waits for the domains to finish.
+    /// Do not await termination from a task managed by this facade. That
+    /// task's own completion is required for its domain to terminate, even
+    /// after shutdown or stop is requested. Drive this wait from a lifecycle
+    /// owner outside the managed tasks.
     pub async fn await_termination(&self) {
         join!(
             async {
