@@ -127,7 +127,14 @@ impl ExecutionServices {
     /// submission that already passed the facade admission check may overlap
     /// domain shutdown and may be accepted or rejected by that domain. When
     /// this method returns, every enabled domain rejects new submissions. The
-    /// report samples domains sequentially in facade order.
+    /// report samples domains sequentially in facade order. Cancelling queued
+    /// work and dropping its captured values happen synchronously on the
+    /// calling thread, so user cleanup can make this method take an
+    /// unbounded amount of time. A blocked cleanup in an earlier domain also
+    /// delays stop notification to later domains. An asynchronous timeout
+    /// cannot preempt this synchronous method. Cleanup must not synchronously
+    /// wait for this service to terminate, since that can wait for its own
+    /// completion.
     ///
     /// # Returns
     ///

@@ -1032,6 +1032,123 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
     drop(runtime);
 }
 
+#[test]
+fn test_stop_waits_for_queued_cpu_task_cleanup_on_calling_thread() {
+    struct CleanupProbe {
+        cleanup_started: mpsc::Sender<std::thread::ThreadId>,
+        release: mpsc::Receiver<()>,
+        dropped: Arc<std::sync::atomic::AtomicUsize>,
+        released: Arc<std::sync::atomic::AtomicBool>,
+    }
+
+    impl Drop for CleanupProbe {
+        fn drop(&mut self) {
+            self.dropped.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let _ = self.cleanup_started.send(std::thread::current().id());
+            if self.release.recv_timeout(TEST_TIMEOUT).is_ok() {
+                self.released.store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+    }
+
+    let runtime = create_runtime();
+    let services = Arc::new(
+        ExecutionServices::builder()
+            .enable_cpu()
+            .runtime(runtime.handle().clone())
+            .cpu_threads(1)
+            .build()
+            .expect("execution services should be created"),
+    );
+    let (running_started_tx, running_started_rx) = mpsc::channel();
+    let (running_release_tx, running_release_rx) = mpsc::channel();
+    let mut running_gate = GateRelease(Some(running_release_tx));
+    let running = services
+        .submit_tracked_cpu(move || {
+            running_started_tx
+                .send(())
+                .expect("running CPU task should report start");
+            running_release_rx
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("running CPU task release gate should open");
+            Ok::<(), io::Error>(())
+        })
+        .expect("running CPU task should be accepted");
+    running_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("CPU worker should start the first task");
+
+    let (cleanup_started_tx, cleanup_started_rx) = mpsc::channel();
+    let (cleanup_release_tx, cleanup_release_rx) = mpsc::channel();
+    let mut cleanup_gate = GateRelease(Some(cleanup_release_tx));
+    let dropped = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let released = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task_ran = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut probe = Some(CleanupProbe {
+        cleanup_started: cleanup_started_tx,
+        release: cleanup_release_rx,
+        dropped: Arc::clone(&dropped),
+        released: Arc::clone(&released),
+    });
+    let task_ran_by_callable = Arc::clone(&task_ran);
+    let queued = services
+        .submit_tracked_cpu(move || {
+            drop(probe.take());
+            task_ran_by_callable.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Ok::<(), io::Error>(())
+        })
+        .expect("second CPU task should be queued");
+
+    let (stop_returned_tx, stop_returned_rx) = mpsc::channel();
+    let stop_services = Arc::clone(&services);
+    let stop_thread = std::thread::spawn(move || {
+        let thread_id = std::thread::current().id();
+        let report = stop_services.stop();
+        stop_returned_tx
+            .send((thread_id, report))
+            .expect("stop result receiver should remain available");
+    });
+
+    let cleanup_thread = cleanup_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("queued task cleanup should start during stop");
+    assert!(matches!(stop_returned_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    assert!(matches!(
+        services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            source: SubmissionError::Shutdown
+        })
+    ));
+
+    cleanup_gate.release();
+    let (stop_thread_id, report) = stop_returned_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("stop should return after queued task cleanup is released");
+    assert_eq!(cleanup_thread, stop_thread_id);
+    assert!(released.load(std::sync::atomic::Ordering::SeqCst));
+    assert_eq!(task_ran.load(std::sync::atomic::Ordering::SeqCst), 0);
+    assert_eq!(dropped.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(report.cpu.expect("CPU domain should be enabled").queued, 1);
+
+    running_gate.release();
+    runtime.block_on(async {
+        timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the diagnostic timeout");
+        timeout(TEST_TIMEOUT, async { running.await })
+            .await
+            .expect("running CPU task should finish after release")
+            .expect("running CPU task should complete successfully");
+        assert!(matches!(
+            timeout(TEST_TIMEOUT, async { queued.await })
+                .await
+                .expect("queued CPU task should resolve after stop"),
+            Err(TaskExecutionError::Cancelled)
+        ));
+    });
+    stop_thread.join().expect("stop thread should exit cleanly");
+}
+
 #[tokio_test]
 async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
     let services = Arc::new(
