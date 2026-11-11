@@ -16,11 +16,12 @@ Each domain owns its own capacity and queue. The facade is not a shared schedule
 - `submission.rs` implements immediate submission and the shared native submission adapter.
 - `waiting_submission.rs` implements the four capacity-wait APIs. All four domains share the retry control flow; blocking uses the owned-task wrapper, while CPU, Tokio blocking, and IO recover tasks through their native task-returning rejection APIs.
 - `internal/execution_services_admission.rs` owns monotonic facade intent and resolves a requested optional domain.
-- `internal/submission_retry.rs` retries submissions in all four domains only when they are saturated, waiting on a Tokio `watch::Receiver<u64>` capacity notification between attempts.
+- `internal/submission_retry.rs` shares the retry control flow across all four domains through `CapacityChangeReceiver`, waiting for a capacity-change notification between saturated attempts.
+- `internal/capacity_change_receiver.rs` adapts native notification sources to the shared retry loop. Blocking, Tokio blocking, and IO use Tokio watch receivers; CPU retains Rayon's `CapacityChangesChanged` wrapper to preserve waker panic isolation.
 - `internal/owned_wait_task.rs` retains the blocking callable while rejected attempt wrappers are dropped.
 - `lifecycle.rs` closes each enabled domain and asynchronously waits for termination.
 
-The Tokio `sync` feature is a direct dependency because the retry module names Tokio's `watch::Receiver` API directly.
+The Tokio `sync` feature remains a direct dependency because the blocking, Tokio-blocking, and IO capacity adapters use Tokio watch receivers.
 
 ## Submission and admission
 

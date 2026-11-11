@@ -16,11 +16,12 @@
 - `submission.rs` 实现立即提交和共享 native 提交适配。
 - `waiting_submission.rs` 实现四个容量等待 API。四个域共享重试控制流；blocking 使用任务所有权包装器，CPU、Tokio blocking 和 IO 则通过原生拒绝值取回任务。
 - `internal/execution_services_admission.rs` 管理单调关闭的门面意图并解析请求域。
-- `internal/submission_retry.rs` 在四个域的提交饱和时重试，并通过 Tokio `watch::Receiver<u64>` 在尝试之间等待容量变化通知。
+- `internal/submission_retry.rs` 通过 `CapacityChangeReceiver` 为四个域共用重试控制流；提交饱和后等待容量变化通知，再发起下一次尝试。
+- `internal/capacity_change_receiver.rs` 将各域原生通知源适配到共享重试循环。blocking、Tokio blocking 和 IO 使用 Tokio watch receiver；CPU 保留 Rayon 的 `CapacityChangesChanged` 包装器，以隔离 waker panic。
 - `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有 blocking callable。
 - `lifecycle.rs` 关闭各启用域，并通过异步通知等待终止。
 
-由于重试模块直接使用 Tokio 的 `watch::Receiver` 类型，Tokio `sync` 是显式直接依赖 feature。
+blocking、Tokio blocking 和 IO 的容量适配器使用 Tokio watch receiver，因此 Tokio `sync` 仍是显式直接依赖 feature。
 
 ## 提交与准入
 
