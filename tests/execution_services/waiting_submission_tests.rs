@@ -1784,16 +1784,7 @@ async fn assert_parent_capacity_one_blocks_child(cpu: bool) {
                 runs.fetch_add(1, Ordering::SeqCst);
                 Ok::<(), io::Error>(())
             };
-            let mut wait: Pin<
-                Box<
-                    dyn Future<
-                            Output = Result<
-                                qubit_executor::TaskHandle<(), io::Error>,
-                                ExecutionServicesSubmissionError,
-                            >,
-                        > + Send,
-                >,
-            > = if cpu {
+            let mut wait: Pin<Box<dyn Future<Output = _> + Send + '_>> = if cpu {
                 Box::pin(child_services.submit_cpu_callable_wait(child))
             } else {
                 Box::pin(child_services.submit_tokio_blocking_callable_wait(child))

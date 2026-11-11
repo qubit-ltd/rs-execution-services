@@ -89,9 +89,9 @@ impl ExecutionServices {
     /// also occupies unfinished-task capacity until it returns. With capacity
     /// one, waiting for a same-domain child submission prevents progress even
     /// when additional workers are available. Keep orchestration outside the
-    /// CPU domain, or explicitly account for worker availability, task capacity,
-    /// and dependency depth. More workers or capacity alone do not make
-    /// arbitrary recursive dependencies safe.
+    /// CPU domain, or explicitly account for worker availability, task
+    /// capacity, and dependency depth. More workers or capacity alone do
+    /// not make arbitrary recursive dependencies safe.
     ///
     /// # Type Parameters
     ///
@@ -157,9 +157,9 @@ impl ExecutionServices {
     /// The parent also occupies unfinished-task capacity until it returns. With
     /// capacity one, waiting for a same-domain child submission prevents
     /// progress even when additional workers are available. Keep orchestration
-    /// outside the blocking pool, or explicitly account for worker availability,
-    /// task capacity, and dependency depth. More workers or capacity alone do
-    /// not make arbitrary recursive dependencies safe.
+    /// outside the blocking pool, or explicitly account for worker
+    /// availability, task capacity, and dependency depth. More workers or
+    /// capacity alone do not make arbitrary recursive dependencies safe.
     ///
     /// Capacity notifications are advisory: another submitter may use an
     /// available slot before this method retries. No FIFO or bounded-wait
