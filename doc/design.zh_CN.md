@@ -70,9 +70,21 @@ wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第�
 
 ## 下游集成
 
-IoC fixture 将 `ExecutionServices` 作为受管理资源。构建失败或取消时，rollback 使用 `stop()` 关闭准入，不等待已运行的同步业务任务自然结束。但 `stop()` 可能在调用线程同步清理排队任务，且清理没有固定耗时上限。现有仅启用 IO 的 fixture 不能证明包含 CPU 或 blocking 域的组合具有有界 stop 耗时。异步 build 失败会运行每个 managed wait 回调并验证服务终止。如果 build future 本身被取消，会同步调用 stop 回调；由于被丢弃的 build 无法驱动异步 wait 回调，fixture 在 build 之外等待服务结束。
+关闭顺序取决于生命周期由谁持有。以下手工管理和 IoC 管理路径具有不同的所有权契约；调用方应采用与应用相符的路径。
 
-正常应用关闭顺序不同：先停止生产者，再调用 `ExecutionServices::shutdown()`，在 Tokio runtime 仍运行时等待服务终止，最后关闭 IoC context。cleanup 时重复 stop 不会重新开放准入。
+### Manual ownership / 手工管理
+
+应用代码直接持有 `ExecutionServices` 时，应先停止外部生产者，并等待所有仍可能提交子任务的生产者结束。然后调用 `ExecutionServices::shutdown()`，在 Tokio runtime 仍运行时等待 `await_termination()`；确认终止后再释放依赖资源和 runtime。这样已接收的工作可以在依赖释放前有序完成。
+
+### IoC ownership / IoC 管理
+
+由容器持有 `ExecutionServices` 时，应把消费者声明为对其所用执行服务的真实依赖，并请求 application graceful shutdown。容器会先驱动依赖消费者的 graceful 回调和最终 flush，再调用执行服务的 graceful shutdown 与终止等待。消费者必须在服务准入仍开放时完成最终 flush；若在请求容器关闭前手动关闭执行服务，就颠倒了这一顺序，不符合此所有权路径。fixture 中的 [`FlushWorker`](../tests/fixtures/ioc_application_consumer/src/flush_worker.rs) 使用 `Managed::asynchronous_with_graceful` 表达这种依赖顺序。
+
+### Build rollback / 构建回滚
+
+Immediate shutdown 和构建回滚使用 managed `stop()` 回调。`stop()` 会关闭准入并请求停止，但无法中断已运行的同步任务；它也可能在调用线程同步析构排队任务，因此耗时没有上限。不能仅凭 stop 调用推断服务已经终止。此 fixture 的 managed wait 回调会另外等待 `ExecutionServices::await_termination()`。
+
+`build_async()` 出错时可能返回一个持有回滚清理的 failure；若它持有清理，调用方必须继续驱动 `failure.wait_cleanup()`。`build_settled()` 则在正常错误返回前等待其拥有的回滚，并返回包含原始原因和清理报告（如有）的 settled failure。清理报告描述 managed 清理回调的结果，也可能报告清理失败；除非 managed wait 回调实际等待了服务终止，报告存在或成功本身不能独立证明服务已终止。build session 被取消后，已丢弃的 build future 无法驱动异步 wait 回调，因此必须由仍存活的 session 所有者调用 `session.wait_cancelled_cleanup()`，或取出并驱动其清理句柄。等待期间须保持 Tokio runtime 运行。
 
 现有 [ioc-integration 工作流](../.github/workflows/ci.yml)检查固定基线；[ioc-current-integration 工作流](../.github/workflows/ioc-current-integration.yml)检查本仓库触发事件对应的提交与 `rs-ioc/main`，其他兄弟仓库仍固定到指定提交。每日定时运行也会覆盖只有下游 IoC 仓库更新的组合。两个工作流都验证 fixture 契约，不代表生产环境已经采用此门面。
 

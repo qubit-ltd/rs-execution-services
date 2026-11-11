@@ -70,9 +70,21 @@ A parent task remains counted against unfinished-task capacity until it returns.
 
 ## Downstream integration
 
-The IoC fixture treats `ExecutionServices` as a managed resource. On build failure or cancellation, rollback uses `stop()` so cleanup closes admission without waiting for already-running synchronous business tasks to finish naturally. However, `stop()` can synchronously clean up queued tasks on its calling thread, and that cleanup has no fixed duration bound. The existing IO-only fixture does not establish a bounded stop duration for combinations that include CPU or blocking domains. A failed async build awaits each managed wait action and verifies the service terminates. If the build future itself is cancelled, its synchronous stop callback runs; the fixture then waits for termination outside the cancelled build because a dropped build cannot drive an async wait callback.
+The shutdown order depends on who owns the lifecycle. The manual and IoC paths below are different ownership contracts; callers must use the path matching their application.
 
-Normal application shutdown has a different order: stop producers, call `ExecutionServices::shutdown()`, await termination while Tokio remains active, then shut down the IoC context. Repeating stop during context cleanup does not reopen admission.
+### Manual ownership / 手工管理
+
+When application code owns `ExecutionServices` directly, first stop external producers and wait for every producer that could submit child work. Then call `ExecutionServices::shutdown()`, await `await_termination()` while Tokio remains active, and only afterward release dependent resources and the runtime. This path lets accepted work finish gracefully before its dependencies are released.
+
+### IoC ownership / IoC 管理
+
+When the container owns `ExecutionServices`, model each consumer as depending on the services it uses and request application graceful shutdown. The container then drives dependent consumers' graceful callbacks and final flushes before the service's graceful shutdown and termination wait. A consumer's final flush must finish while service admission is still open; manually shutting down the service before asking the container to shut down reverses this order and is not appropriate for this ownership path. The fixture's [`FlushWorker`](../tests/fixtures/ioc_application_consumer/src/flush_worker.rs) uses `Managed::asynchronous_with_graceful` to express this dependency order.
+
+### Build rollback / 构建回滚
+
+Immediate shutdown and construction rollback use the managed `stop()` callback. `stop()` closes admission and requests stopping, but cannot interrupt already-running synchronous work; it can also synchronously drop queued tasks on the calling thread, so its duration is not bounded. Do not infer termination from the stop call alone. In this fixture, the managed wait callback separately awaits `ExecutionServices::await_termination()`.
+
+`build_async()` can return a failure that owns rollback cleanup; when it does, the caller must drive `failure.wait_cleanup()` after an error. `build_settled()` instead waits for owned rollback on normal error completion and returns a settled failure containing the original cause and any cleanup report. A cleanup report describes the managed cleanup callbacks and may report unsuccessful cleanup; its presence or success does not independently prove service termination unless the managed wait callback actually awaited termination. For a cancelled build session, the build future cannot drive the asynchronous wait callback after it is dropped, so the surviving session owner must call `session.wait_cancelled_cleanup()` (or take and drive its cleanup handle). Keep Tokio running while these waits need it.
 
 The existing [ioc-integration workflow](../.github/workflows/ci.yml) checks a fixed baseline. The [ioc-current-integration workflow](../.github/workflows/ioc-current-integration.yml) checks this repository revision from the triggering event together with `rs-ioc/main`; its other sibling repositories remain pinned to fixed commits. Its daily schedule also checks combinations where only the downstream IoC repository has changed. Both workflows verify fixture contracts and do not indicate production adoption.
 

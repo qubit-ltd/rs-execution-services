@@ -16,6 +16,7 @@ const ENGLISH_GUIDE: &str = include_str!("../doc/user_guide.md");
 const CHINESE_GUIDE: &str = include_str!("../doc/user_guide.zh_CN.md");
 const ENGLISH_DESIGN: &str = include_str!("../doc/design.md");
 const CHINESE_DESIGN: &str = include_str!("../doc/design.zh_CN.md");
+const GRACEFUL_FLUSH_WORKER: &str = include_str!("fixtures/ioc_application_consumer/src/flush_worker.rs");
 
 fn first_rust_code_block(markdown: &str) -> Option<String> {
     let mut lines = markdown.lines();
@@ -150,4 +151,39 @@ fn test_design_contract_is_documented_bilingually_and_linked_from_guides() {
     }
     assert!(ENGLISH_GUIDE.contains("design.md"));
     assert!(CHINESE_GUIDE.contains("design.zh_CN.md"));
+}
+
+#[test]
+fn test_design_distinguishes_manual_and_ioc_shutdown_ownership() {
+    let fixture_link = "../tests/fixtures/ioc_application_consumer/src/flush_worker.rs";
+    for (path, document) in [
+        ("doc/design.md", ENGLISH_DESIGN),
+        ("doc/design.zh_CN.md", CHINESE_DESIGN),
+    ] {
+        for heading in [
+            "### Manual ownership / 手工管理",
+            "### IoC ownership / IoC 管理",
+            "### Build rollback / 构建回滚",
+        ] {
+            assert!(document.contains(heading), "{path} must contain {heading}");
+        }
+        for contract in [
+            "asynchronous_with_graceful",
+            "wait_cleanup()",
+            "wait_cancelled_cleanup()",
+            fixture_link,
+        ] {
+            assert!(document.contains(contract), "{path} must contain {contract}");
+        }
+        let resolved_fixture = std::path::Path::new(path)
+            .parent()
+            .expect("design document should have a parent directory")
+            .join(fixture_link);
+        assert!(
+            resolved_fixture.is_file(),
+            "fixture link in {path} must resolve to a file: {}",
+            resolved_fixture.display()
+        );
+    }
+    assert!(GRACEFUL_FLUSH_WORKER.contains("Managed::asynchronous_with_graceful"));
 }
