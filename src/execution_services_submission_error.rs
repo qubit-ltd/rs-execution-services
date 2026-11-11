@@ -50,12 +50,31 @@ pub enum ExecutionServicesSubmissionError {
         domain: ExecutionDomain,
     },
 
-    /// An enabled domain rejected the task, or the facade has shut down.
-    #[error("execution domain rejected the task: {source}")]
+    /// The requested domain rejected the task, or facade admission has closed.
+    #[error("execution domain {domain:?} rejected the task: {source}")]
     Rejected {
+        /// Domain selected by the submission method.
+        domain: ExecutionDomain,
         /// Rejection returned by the facade gate or underlying execution
         /// domain.
-        #[from]
+        #[source]
         source: SubmissionError,
     },
+}
+
+impl ExecutionServicesSubmissionError {
+    /// Creates a rejection associated with the domain selected by the caller.
+    ///
+    /// # Parameters
+    ///
+    /// * `domain` - Execution domain requested by the submission method.
+    /// * `source` - Native submission reason returned by admission or the
+    ///   selected execution service.
+    ///
+    /// # Returns
+    ///
+    /// A rejection preserving both the requested domain and native reason.
+    pub fn rejected(domain: ExecutionDomain, source: SubmissionError) -> Self {
+        Self::Rejected { domain, source }
+    }
 }

@@ -2,7 +2,7 @@
 
 [中文用户手册](user_guide.zh_CN.md) | [README](../README.md)
 
-This guide is for Rust application developers using `qubit-execution-services` 0.10.1. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
+This guide is for Rust application developers using `qubit-execution-services` 0.11.0. It explains how to route different kinds of work through one facade, configure its managed pools, handle submission and task results, and shut the services down. The crate is an application-level facade; a library that needs only one execution layer can depend on that layer directly.
 
 ## Conceptual Model
 
@@ -54,7 +54,7 @@ The crate requires Rust 1.94 or newer. Add the published crate to the applicatio
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10.1"
+qubit-execution-services = "0.11.0"
 tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 ```
 
@@ -363,7 +363,7 @@ For a complete configuration that separates pool sizes from task capacities, see
 
 The immediate submission methods return `SubmissionError::Saturated` when the selected domain cannot accept more work. The `submit_blocking_callable_wait`, `submit_cpu_callable_wait`, `submit_tokio_blocking_callable_wait`, and `spawn_io_wait` methods are lazy futures: they do no submission until first polled. They retain one callable or future across attempts, subscribing to capacity changes before the first attempt. Capacity notifications are advisory, so a competing submitter can use the available slot first. No FIFO, fairness, or bounded-wait guarantee is provided.
 
-When the facade is running, a disabled domain returns `DomainDisabled`; after shutdown or stop closes admission, every submission returns `Rejected { source: Shutdown }`, including wait calls targeting a disabled domain. An immediate submission to a full enabled domain returns `Rejected { source: Saturated }`; a wait call retries after a capacity notification. Dropping a wait future before acceptance drops its unaccepted task. These pending tasks are not counted by domain task capacity or `snapshot().accepted_unfinished`; limit the number of concurrent waiters or apply application-level timeouts when memory must be bounded.
+When the facade is running, a disabled domain returns `DomainDisabled`; after shutdown or stop closes admission, every submission returns `Rejected { domain, source: Shutdown }`, including wait calls targeting a disabled domain. An immediate submission to a full enabled domain returns `Rejected { domain, source: Saturated }`; a wait call retries after a capacity notification. Dropping a wait future before acceptance drops its unaccepted task. These pending tasks are not counted by domain task capacity or `snapshot().accepted_unfinished`; limit the number of concurrent waiters or apply application-level timeouts when memory must be bounded.
 
 After acceptance, the three synchronous wait methods return `TaskHandle`, which reports completion but has no `cancel()` method. Dropping that result handle does not cancel the task. The IO wait method returns `TokioTaskHandle`; its cancellation requests abort and may race normal completion. Started synchronous work cannot be forcibly interrupted. A parent waiting for same-domain child work can occupy both a worker and unfinished-task capacity needed by the child. With CPU or Tokio blocking task capacity one, the parent waiting for the child submission prevents progress even when additional workers are available. An IO parent awaiting a child at capacity one holds the only accepted-future slot, so the child cannot be accepted. The blocking domain has a separate queue-capacity model: its queue limit counts waiting tasks, while running tasks are bounded by the worker pool. Keep orchestration outside the domain, or explicitly account for worker availability, task capacity, and dependency depth; see the [capacity-wait design](design.md#capacity-wait-algorithm). More workers or capacity alone do not make arbitrary recursive dependencies safe.
 
@@ -373,7 +373,7 @@ Size capacities from measurements. Record peak arrival rate, task service time, 
 
 ### Tokio runtime ownership
 
-The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. While the facade is running, a submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`. Once shutdown or stop closes admission, `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }` takes precedence, including for disabled domains. Rejections from enabled domains preserve their native reason such as `Saturated`.
+The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed domains and configures their accepted-task capacities. Blocking-only and CPU-only configurations do not require a Tokio handle. Configure Tokio's runtime and scheduler in the application that creates the runtime. While the facade is running, a submission to a disabled domain returns `ExecutionServicesSubmissionError::DomainDisabled`. Once shutdown or stop closes admission, `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }` takes precedence, including for disabled domains. Rejections from enabled domains preserve their native reason such as `Saturated`.
 
 ### Graceful shutdown and abrupt stop
 
@@ -381,7 +381,7 @@ The builder passes the supplied `tokio::runtime::Handle` to enabled Tokio-backed
 
 `await_termination()` uses asynchronous notifications for enabled domains and does not occupy Tokio blocking threads. It may be polled by an async executor; keep the Tokio runtime supplied to the builder running until its accepted Tokio tasks finish. Awaiting from another runtime does not drive a stopped current-thread runtime. Dropping the wait future releases that waiter's resources without stopping the services. Before shutdown or stop, the wait remains pending.
 
-The facade does not know which application components can submit work or which external resources their tasks use. Accepted tasks may keep running after shutdown is requested, but any child submission they make through this facade after admission closes is rejected with `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`. Stop external entry points and wait for every producer that may submit child work to finish before calling `services.shutdown()`, then await `services.await_termination()`. Keep the supplied runtime running through that wait, and release resources used by accepted tasks only after termination. The [application shutdown example](../examples/application_shutdown.rs) demonstrates this cross-domain order.
+The facade does not know which application components can submit work or which external resources their tasks use. Accepted tasks may keep running after shutdown is requested, but any child submission they make through this facade after admission closes is rejected with `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }`. Stop external entry points and wait for every producer that may submit child work to finish before calling `services.shutdown()`, then await `services.await_termination()`. Keep the supplied runtime running through that wait, and release resources used by accepted tasks only after termination. The [application shutdown example](../examples/application_shutdown.rs) demonstrates this cross-domain order.
 
 Dropping `ExecutionServices` is different from calling `shutdown()` or `stop()`: drop releases the facade's domain service values, but does not coordinate a stop or wait for every accepted task. The `blocking` service value requests graceful shutdown from its pool when dropped. The CPU wrapper has no drop-time call to its explicit `shutdown()` or `stop()`; its Rayon pool value's destructor signals pool termination, and Rayon worker threads terminate gradually after existing work completes. This is not a facade-level wait for service termination. Dropping either Tokio service wrapper does not request cancellation of accepted tasks, which remain under Tokio's task/runtime lifecycle. Do not use facade drop as a way to abort Tokio work or as proof that task cleanup has finished.
 
@@ -398,9 +398,10 @@ Use the facade when an application needs one owner to submit work to and close s
 ## Errors and Diagnostics
 
 - `ExecutionServicesBuilder::build()` returns `NoDomains` when no domain is enabled, `ConfigurationForDisabledDomain` when options were supplied for a disabled domain, `MissingTokioRuntime` when an enabled Tokio domain lacks a runtime, or a `Blocking`/`Cpu` error when the corresponding enabled builder rejects its configuration.
-- While admission is open, submissions to disabled domains return `ExecutionServicesSubmissionError::DomainDisabled`. After shutdown or stop closes admission, submissions return `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }` first. Enabled-domain errors such as `Saturated` are preserved in `Rejected`.
+- While admission is open, submissions to disabled domains return `ExecutionServicesSubmissionError::DomainDisabled`. After shutdown or stop closes admission, submissions return `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }` first. Enabled-domain errors such as `Saturated` are preserved in `Rejected`.
 - Once accepted, the task's result is obtained through its handle. A task's own error value is distinct from a submission error; inspect both layers rather than treating successful submission as successful completion.
 - Inspect each enabled domain's `Option<StopReport>` directly; there are no aggregate totals.
+- Version 0.11 adds the requested domain to `Rejected` and removes the context-free `From<SubmissionError>` conversion. Migrate exact matches to `Rejected { domain, source }`, or use `Rejected { source, .. }` when the domain is irrelevant. For `?` conversion, use `.map_err(|source| ExecutionServicesSubmissionError::rejected(domain, source))?`; update a `0.10` dependency requirement to `0.11`.
 
 ## Troubleshooting
 

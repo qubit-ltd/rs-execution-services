@@ -15,9 +15,11 @@ Add the crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10"
+qubit-execution-services = "0.11"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
+
+Version 0.11 adds the requested domain to `ExecutionServicesSubmissionError::Rejected` and removes the context-free conversion from `SubmissionError`. See the [user guide](doc/user_guide.md) for migration details.
 
 ## Quick Start
 

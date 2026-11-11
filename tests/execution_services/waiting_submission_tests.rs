@@ -66,6 +66,15 @@ enum WaitCompetitionDomain {
 }
 
 impl WaitCompetitionDomain {
+    fn execution_domain(self) -> ExecutionDomain {
+        match self {
+            Self::Blocking => ExecutionDomain::Blocking,
+            Self::Cpu => ExecutionDomain::Cpu,
+            Self::TokioBlocking => ExecutionDomain::TokioBlocking,
+            Self::Io => ExecutionDomain::Io,
+        }
+    }
+
     fn all() -> [Self; 4] {
         [Self::Blocking, Self::Cpu, Self::TokioBlocking, Self::Io]
     }
@@ -569,8 +578,9 @@ async fn run_wait_competition(domain: WaitCompetitionDomain, scenario: WaitCompe
                 matches!(
                     rejected,
                     Err(ExecutionServicesSubmissionError::Rejected {
-                        source: SubmissionError::Shutdown
-                    })
+                        domain: actual_domain,
+                        source: SubmissionError::Shutdown,
+                    }) if actual_domain == domain.execution_domain()
                 ),
                 "{domain:?}/{label}: remaining waiter should be rejected with Shutdown",
             );
@@ -967,7 +977,8 @@ async fn test_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1025,7 +1036,8 @@ async fn test_blocking_full_capacity_wait_wakes_on_stop() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1251,7 +1263,8 @@ async fn test_cpu_full_capacity_wait_wakes_on_shutdown() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1304,7 +1317,8 @@ async fn test_cpu_full_capacity_wait_wakes_on_stop() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1357,7 +1371,8 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_shutdown() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1410,7 +1425,8 @@ async fn test_tokio_blocking_full_capacity_wait_wakes_on_stop() {
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.expect("wait must wake"),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(calls.load(Ordering::SeqCst), 0);
@@ -1451,6 +1467,7 @@ async fn test_wait_prioritizes_shutdown_over_disabled_domain() {
             result,
             Err(ExecutionServicesSubmissionError::Rejected {
                 source: SubmissionError::Shutdown,
+                ..
             })
         ));
     }
@@ -1518,7 +1535,8 @@ async fn test_disabled_domain_does_not_run_task_and_shutdown_rejects_waiter() {
     assert!(matches!(
         result,
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
@@ -1651,7 +1669,8 @@ async fn test_stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_tas
     assert!(matches!(
         timeout(TEST_TIMEOUT, waiting).await.unwrap(),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert_eq!(drop_count.load(Ordering::SeqCst), 1);
@@ -1795,7 +1814,8 @@ async fn assert_parent_capacity_one_blocks_child(cpu: bool) {
             assert!(matches!(
                 rejected,
                 Err(ExecutionServicesSubmissionError::Rejected {
-                    source: SubmissionError::Shutdown
+                    source: SubmissionError::Shutdown,
+                    ..
                 })
             ));
             Ok::<(), io::Error>(())

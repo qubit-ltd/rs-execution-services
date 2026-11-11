@@ -15,9 +15,11 @@ Qubit Execution Services 为 Rust 应用提供统一的任务分发入口：同�
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10"
+qubit-execution-services = "0.11"
 tokio = { version = "1.53", features = ["rt", "time"] }
 ```
+
+0.11 版本为 `ExecutionServicesSubmissionError::Rejected` 增加请求域，并移除无法获知域的 `SubmissionError` 自动转换。迁移说明见[用户指南](doc/user_guide.zh_CN.md)。
 
 ## 快速开始
 

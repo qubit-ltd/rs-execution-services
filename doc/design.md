@@ -27,17 +27,17 @@ The Tokio `sync` feature remains a direct dependency because the blocking, Tokio
 
 The facade records one of three intents: `Running`, `ShuttingDown`, or `Stopping`. Shutdown and stop close admission before asking each enabled service to perform its lifecycle operation. Stop upgrades graceful shutdown and cannot be downgraded.
 
-Both immediate and waiting submission first resolve the requested domain under admission. While intent is `Running`, an absent service returns `DomainDisabled`. Once intent has closed admission, `Rejected { source: Shutdown }` takes precedence, even when the requested domain is disabled. The admission mutex is released before native submission, rejected task destruction, user callable execution, or future polling.
+Both immediate and waiting submission first resolve the requested domain under admission. While intent is `Running`, an absent service returns `DomainDisabled`. Once intent has closed admission, `Rejected { domain, source: Shutdown }` takes precedence, even when the requested domain is disabled. The admission mutex is released before native submission, rejected task destruction, user callable execution, or future polling.
 
 Admission and native acceptance are not one atomic transaction. A call that passed the facade check may overlap shutdown or stop; the underlying service decides whether it accepts that task. The facade does not promise strict linearizability across independent services.
 
 | Facade intent | Domain state | Immediate submission | Capacity-wait submission |
 | --- | --- | --- | --- |
 | Running | Disabled | `DomainDisabled` | `DomainDisabled` |
-| Closed | Disabled or enabled | `Rejected(Shutdown)` | `Rejected(Shutdown)` |
+| Closed | Disabled or enabled | `Rejected { domain, source: Shutdown }` | `Rejected { domain, source: Shutdown }` |
 | Running | Enabled with available capacity | Native handle | Native handle |
-| Running | Enabled at capacity | `Rejected(Saturated)` | Pending; retry after notification |
-| Closed during a wait | Previously enabled | Not applicable | Wake, recheck admission, return `Rejected(Shutdown)` |
+| Running | Enabled at capacity | `Rejected { domain, source: Saturated }` | Pending; retry after notification |
+| Closed during a wait | Previously enabled | Not applicable | Wake, recheck admission, return `Rejected { domain, source: Shutdown }` |
 
 ## Capacity-wait algorithm
 

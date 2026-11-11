@@ -74,6 +74,7 @@ impl ExecutionServices {
             service.submit_callable(task.callable_attempt())
         })
         .await
+        .map_err(|source| ExecutionServicesSubmissionError::rejected(ExecutionDomain::Blocking, source))
     }
 
     /// Submits a CPU callable, waiting and retrying when capacity is full.
@@ -141,6 +142,7 @@ impl ExecutionServices {
             }
         })
         .await
+        .map_err(|source| ExecutionServicesSubmissionError::rejected(ExecutionDomain::Cpu, source))
     }
 
     /// Submits a Tokio blocking callable, waiting and retrying when capacity is
@@ -217,6 +219,7 @@ impl ExecutionServices {
             }
         })
         .await
+        .map_err(|source| ExecutionServicesSubmissionError::rejected(ExecutionDomain::TokioBlocking, source))
     }
 
     /// Submits an IO future, waiting and retrying when accepted-future capacity
@@ -283,5 +286,6 @@ impl ExecutionServices {
             }
         })
         .await
+        .map_err(|source| ExecutionServicesSubmissionError::rejected(ExecutionDomain::Io, source))
     }
 }

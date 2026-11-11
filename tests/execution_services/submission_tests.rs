@@ -13,6 +13,7 @@ use std::sync::Barrier;
 use std::sync::mpsc;
 use std::time::Duration;
 
+use qubit_execution_services::ExecutionDomain;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesSubmissionError;
 use qubit_executor::CancelResult;
@@ -142,7 +143,8 @@ fn test_execution_services_cpu_capacity_rejects_and_reuses_slots() {
     assert!(matches!(
         services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Saturated
+            domain: ExecutionDomain::Cpu,
+            source: SubmissionError::Saturated,
         })
     ));
     assert_eq!(queued.cancel(), CancelResult::Cancelled);
@@ -339,7 +341,8 @@ fn test_rejected_blocking_task_drop_may_shutdown_facade() {
     assert!(matches!(
         result,
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Saturated
+            domain: ExecutionDomain::Blocking,
+            source: SubmissionError::Saturated,
         })
     ));
     assert!(services.is_shutting_down());
@@ -393,7 +396,8 @@ fn test_closed_facade_rejected_task_drop_may_request_stop() {
     assert!(matches!(
         result,
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert!(dropped.load(std::sync::atomic::Ordering::SeqCst));
@@ -803,7 +807,8 @@ async fn test_execution_services_shutdown_rejects_new_tasks() {
     assert!(matches!(
         result,
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     timeout(TEST_TIMEOUT, services.await_termination())
@@ -829,30 +834,65 @@ async fn test_execution_services_shutdown_rejects_submissions_in_every_domain() 
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            domain: ExecutionDomain::Blocking,
+            source: SubmissionError::Shutdown,
         })
     ));
     assert!(matches!(
         services.submit_cpu(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            domain: ExecutionDomain::Cpu,
+            source: SubmissionError::Shutdown,
         })
     ));
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            domain: ExecutionDomain::TokioBlocking,
+            source: SubmissionError::Shutdown,
         })
     ));
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            domain: ExecutionDomain::Io,
+            source: SubmissionError::Shutdown,
         })
     ));
     timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("services should terminate before the diagnostic timeout");
+}
+
+#[test]
+fn test_closed_facade_rejections_preserve_requested_disabled_domain() {
+    let services = ExecutionServices::builder()
+        .enable_blocking()
+        .build()
+        .expect("blocking-only services should build");
+    services.shutdown();
+
+    assert!(matches!(
+        services.submit_cpu(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            domain: ExecutionDomain::Cpu,
+            source: SubmissionError::Shutdown,
+        })
+    ));
+    assert!(matches!(
+        services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            domain: ExecutionDomain::TokioBlocking,
+            source: SubmissionError::Shutdown,
+        })
+    ));
+    assert!(matches!(
+        services.spawn_io(async { Ok::<(), io::Error>(()) }),
+        Err(ExecutionServicesSubmissionError::Rejected {
+            domain: ExecutionDomain::Io,
+            source: SubmissionError::Shutdown,
+        })
+    ));
 }
 
 #[tokio_test]
@@ -873,25 +913,29 @@ async fn test_execution_services_stop_keeps_all_domains_closed_on_repeated_shutd
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert!(matches!(
         services.submit_cpu(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
     timeout(TEST_TIMEOUT, services.await_termination())
@@ -998,6 +1042,7 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
                 Ok(Ok(())) => {}
                 Ok(Err(ExecutionServicesSubmissionError::Rejected {
                     source: SubmissionError::Shutdown,
+                    ..
                 })) => {}
                 Ok(Err(error)) => panic!("unexpected concurrent submission error: {error:?}"),
                 Err(_) => panic!("concurrent submission or shutdown worker panicked"),
@@ -1007,25 +1052,29 @@ fn test_execution_services_rejects_after_concurrent_shutdown_and_stop() {
         assert!(matches!(
             services.submit_blocking(|| Ok::<(), io::Error>(())),
             Err(ExecutionServicesSubmissionError::Rejected {
-                source: SubmissionError::Shutdown
+                source: SubmissionError::Shutdown,
+                ..
             })
         ));
         assert!(matches!(
             services.submit_cpu(|| Ok::<(), io::Error>(())),
             Err(ExecutionServicesSubmissionError::Rejected {
-                source: SubmissionError::Shutdown
+                source: SubmissionError::Shutdown,
+                ..
             })
         ));
         assert!(matches!(
             services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
             Err(ExecutionServicesSubmissionError::Rejected {
-                source: SubmissionError::Shutdown
+                source: SubmissionError::Shutdown,
+                ..
             })
         ));
         assert!(matches!(
             services.spawn_io(async { Ok::<(), io::Error>(()) }),
             Err(ExecutionServicesSubmissionError::Rejected {
-                source: SubmissionError::Shutdown
+                source: SubmissionError::Shutdown,
+                ..
             })
         ));
     }
@@ -1116,7 +1165,8 @@ fn test_stop_waits_for_queued_cpu_task_cleanup_on_calling_thread() {
     assert!(matches!(
         services.submit_cpu_callable(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            source: SubmissionError::Shutdown,
+            ..
         })
     ));
 
@@ -1174,7 +1224,8 @@ async fn test_shutdown_rejects_child_submission_from_accepted_io_task() {
             assert!(matches!(
                 result,
                 Err(ExecutionServicesSubmissionError::Rejected {
-                    source: SubmissionError::Shutdown
+                    source: SubmissionError::Shutdown,
+                    ..
                 })
             ));
             Ok::<(), io::Error>(())

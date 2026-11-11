@@ -24,11 +24,48 @@ use tokio::runtime::Handle;
 use tokio::runtime::Runtime;
 use tokio::test as tokio_test;
 
+const TEST_TIMEOUT: Duration = Duration::from_secs(5);
+
+struct ReleaseOnDrop(Option<mpsc::Sender<()>>);
+
+impl ReleaseOnDrop {
+    fn new(sender: mpsc::Sender<()>) -> Self {
+        Self(Some(sender))
+    }
+
+    fn release(&mut self) {
+        if let Some(sender) = self.0.take() {
+            let _ = sender.send(());
+        }
+    }
+}
+
+impl Drop for ReleaseOnDrop {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
 fn create_runtime() -> Runtime {
     Builder::new_current_thread()
         .enable_all()
         .build()
         .expect("Failed to create tokio runtime for execution services builder tests")
+}
+
+#[test]
+fn test_release_on_drop_sends_once_after_release_or_scope_exit() {
+    let (sender, receiver) = mpsc::channel();
+    {
+        let mut release = ReleaseOnDrop::new(sender);
+        release.release();
+    }
+    receiver.recv_timeout(TEST_TIMEOUT).expect("release should be sent");
+    assert!(matches!(receiver.try_recv(), Err(mpsc::TryRecvError::Disconnected)));
+
+    let (sender, receiver) = mpsc::channel();
+    drop(ReleaseOnDrop::new(sender));
+    receiver.recv_timeout(TEST_TIMEOUT).expect("drop should send release");
 }
 
 #[test]
@@ -202,13 +239,26 @@ fn test_only_io_domain_builds_and_other_domains_report_disabled() {
     let io = services
         .spawn_io(async { Ok::<usize, io::Error>(42) })
         .expect("enabled IO domain should accept a future");
-    assert_eq!(runtime.block_on(io).expect("IO task should succeed"), 42);
+    assert_eq!(
+        runtime
+            .block_on(async {
+                tokio::time::timeout(TEST_TIMEOUT, io)
+                    .await
+                    .expect("IO task should finish before the timeout")
+            })
+            .expect("IO task should succeed"),
+        42
+    );
     let report = services.stop();
     assert!(report.blocking.is_none());
     assert!(report.cpu.is_none());
     assert!(report.tokio_blocking.is_none());
     assert!(report.io.is_some());
-    runtime.block_on(services.await_termination());
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the timeout");
+    });
 }
 
 #[test]
@@ -221,7 +271,8 @@ fn test_facade_shutdown_error_precedes_disabled_domain_error() {
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Shutdown
+            domain: ExecutionDomain::Io,
+            source: SubmissionError::Shutdown,
         })
     ));
 }
@@ -291,19 +342,29 @@ fn test_execution_services_builder_options_and_accessors() {
 
     assert_eq!(services.lifecycle(), ExecutorServiceLifecycle::Running);
 
-    services
+    let blocking = services
         .submit_tracked_blocking(|| Ok::<(), io::Error>(()))
-        .expect("blocking domain should accept runnable")
-        .get()
-        .expect("blocking runnable should complete");
-    services
+        .expect("blocking domain should accept runnable");
+    let cpu = services
         .submit_tracked_cpu(|| Ok::<(), io::Error>(()))
-        .expect("cpu domain should accept runnable")
-        .get()
-        .expect("cpu runnable should complete");
+        .expect("cpu domain should accept runnable");
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, blocking)
+            .await
+            .expect("blocking runnable should complete before the timeout")
+            .expect("blocking runnable should succeed");
+        tokio::time::timeout(TEST_TIMEOUT, cpu)
+            .await
+            .expect("CPU runnable should complete before the timeout")
+            .expect("CPU runnable should succeed");
+    });
 
     services.shutdown();
-    create_runtime().block_on(services.await_termination());
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the timeout");
+    });
 }
 
 #[test]
@@ -321,17 +382,20 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
         .expect("execution services should be created");
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
+    let mut release = ReleaseOnDrop::new(release_sender);
 
     services
         .submit_blocking(move || {
             started_sender.send(()).expect("blocking task should start");
-            release_receiver.recv().expect("blocking task should be released");
+            release_receiver
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task should be released before the timeout");
             Ok::<(), io::Error>(())
         })
         .expect("blocking task should be accepted");
     started_receiver
-        .recv()
-        .expect("blocking task should report that it started");
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should report that it started before the timeout");
 
     for _ in 0..1024 {
         services
@@ -341,14 +405,19 @@ fn test_execution_services_builder_default_blocking_queue_is_bounded() {
     assert!(matches!(
         services.submit_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Saturated
+            domain: ExecutionDomain::Blocking,
+            source: SubmissionError::Saturated,
         })
     ));
 
     let report = services.stop();
     assert_eq!(report.blocking.expect("blocking enabled").queued, 1024);
-    release_sender.send(()).expect("blocking task release should be sent");
-    runtime.block_on(services.await_termination());
+    release.release();
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the timeout");
+    });
 }
 
 #[test]
@@ -367,17 +436,20 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
         .expect("execution services should be created");
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
+    let mut release = ReleaseOnDrop::new(release_sender);
 
     services
         .submit_blocking(move || {
             started_sender.send(()).expect("blocking task should start");
-            release_receiver.recv().expect("blocking task should be released");
+            release_receiver
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task should be released before the timeout");
             Ok::<(), io::Error>(())
         })
         .expect("blocking task should be accepted");
     started_receiver
-        .recv()
-        .expect("blocking task should report that it started");
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("blocking task should report that it started before the timeout");
 
     for _ in 0..1025 {
         services
@@ -387,8 +459,12 @@ fn test_execution_services_builder_can_use_unbounded_blocking_queue() {
 
     let report = services.stop();
     assert_eq!(report.blocking.expect("blocking enabled").queued, 1025);
-    release_sender.send(()).expect("blocking task release should be sent");
-    runtime.block_on(services.await_termination());
+    release.release();
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the timeout");
+    });
 }
 
 #[tokio_test]
@@ -406,20 +482,24 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
 
     let (started_sender, started_receiver) = mpsc::channel();
     let (release_sender, release_receiver) = mpsc::channel();
+    let mut release = ReleaseOnDrop::new(release_sender);
     let blocking = services
         .submit_tracked_tokio_blocking(move || {
             started_sender.send(()).expect("blocking task should start");
-            release_receiver.recv().expect("blocking task should be released");
+            release_receiver
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("blocking task should be released before the timeout");
             Ok::<(), io::Error>(())
         })
         .expect("Tokio blocking domain should accept one task");
     started_receiver
-        .recv_timeout(Duration::from_secs(1))
-        .expect("Tokio blocking task should start");
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("Tokio blocking task should start before the timeout");
     assert!(matches!(
         services.submit_tokio_blocking(|| Ok::<(), io::Error>(())),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Saturated
+            domain: ExecutionDomain::TokioBlocking,
+            source: SubmissionError::Saturated,
         })
     ));
 
@@ -432,16 +512,27 @@ async fn test_execution_services_builder_configures_independent_tokio_capacities
     assert!(matches!(
         services.spawn_io(async { Ok::<(), io::Error>(()) }),
         Err(ExecutionServicesSubmissionError::Rejected {
-            source: SubmissionError::Saturated
+            domain: ExecutionDomain::Io,
+            source: SubmissionError::Saturated,
         })
     ));
 
     let report = services.stop();
     assert_eq!(report.io.expect("IO enabled").cancelled, 1);
-    release_sender.send(()).expect("Tokio blocking task should be released");
-    services.await_termination().await;
-    blocking.await.expect("running Tokio blocking task should finish");
-    assert!(matches!(io.await, Err(TaskExecutionError::Cancelled)));
+    release.release();
+    tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate before the timeout");
+    tokio::time::timeout(TEST_TIMEOUT, blocking)
+        .await
+        .expect("running Tokio blocking task should finish before the timeout")
+        .expect("running Tokio blocking task should succeed");
+    assert!(matches!(
+        tokio::time::timeout(TEST_TIMEOUT, io)
+            .await
+            .expect("IO task should finish before the timeout"),
+        Err(TaskExecutionError::Cancelled)
+    ));
 }
 
 #[test]
@@ -462,6 +553,8 @@ fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills(
     let (started_sender, started_receiver) = mpsc::channel();
     let (first_release_sender, first_release_receiver) = mpsc::channel();
     let (second_release_sender, second_release_receiver) = mpsc::channel();
+    let mut first_release = ReleaseOnDrop::new(first_release_sender);
+    let mut second_release = ReleaseOnDrop::new(second_release_sender);
 
     let blocking_started_sender = started_sender.clone();
     services
@@ -470,15 +563,15 @@ fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills(
                 .send(1)
                 .expect("core worker should report that it started");
             first_release_receiver
-                .recv_timeout(Duration::from_secs(5))
-                .expect("core worker should be released");
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("core worker should be released before the timeout");
             Ok::<(), io::Error>(())
         })
         .expect("core worker task should be accepted");
     assert_eq!(
         started_receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("core worker should start"),
+            .recv_timeout(TEST_TIMEOUT)
+            .expect("core worker should start before the timeout"),
         1,
     );
 
@@ -488,8 +581,8 @@ fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills(
                 .send(2)
                 .expect("additional worker should report that it started");
             second_release_receiver
-                .recv_timeout(Duration::from_secs(5))
-                .expect("additional worker should be released");
+                .recv_timeout(TEST_TIMEOUT)
+                .expect("additional worker should be released before the timeout");
             Ok::<(), io::Error>(())
         })
         .expect("one task should fit in the bounded queue");
@@ -497,13 +590,15 @@ fn test_execution_services_builder_grows_blocking_pool_when_bounded_queue_fills(
         .submit_blocking(|| Ok::<(), io::Error>(()))
         .expect("a full queue should trigger the configured additional worker");
 
-    let second_started = started_receiver.recv_timeout(Duration::from_secs(2)) == Ok(2);
-    first_release_sender.send(()).expect("core worker should be released");
-    second_release_sender
-        .send(())
-        .expect("additional worker should be released");
+    let second_started = started_receiver.recv_timeout(TEST_TIMEOUT) == Ok(2);
+    first_release.release();
+    second_release.release();
     services.shutdown();
-    runtime.block_on(services.await_termination());
+    runtime.block_on(async {
+        tokio::time::timeout(TEST_TIMEOUT, services.await_termination())
+            .await
+            .expect("services should terminate before the timeout");
+    });
     assert!(
         second_started,
         "the bounded queue should cause a second worker to start"

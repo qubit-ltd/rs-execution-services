@@ -2,7 +2,7 @@
 
 This standalone application exercises the public integration boundary among
 `qubit-ioc` 0.4, `qubit-event-bus` 0.21, `qubit-fs-registry` 0.8,
-`qubit-fs-local` 0.11, `qubit-fs` 0.3, and `qubit-execution-services` 0.10.
+`qubit-fs-local` 0.11, `qubit-fs` 0.3, and `qubit-execution-services` 0.11.
 It temporarily uses sibling path dependencies for the current `qubit-ioc` 0.4,
 `qubit-event-bus` 0.21, and filesystem crate checkouts, plus the local
 `qubit-execution-services` crate under test. These dependencies retain their

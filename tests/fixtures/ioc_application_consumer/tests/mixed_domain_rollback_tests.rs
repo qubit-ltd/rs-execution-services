@@ -19,6 +19,7 @@ use std::sync::mpsc;
 use std::task::Poll;
 use std::time::Duration;
 
+use qubit_execution_services::ExecutionDomain;
 use qubit_execution_services::ExecutionServices;
 use qubit_execution_services::ExecutionServicesBuilder;
 use qubit_execution_services::ExecutionServicesSubmissionError;
@@ -43,6 +44,14 @@ enum SyncDomain {
 }
 
 impl SyncDomain {
+    fn execution_domain(self) -> ExecutionDomain {
+        match self {
+            Self::Blocking => ExecutionDomain::Blocking,
+            Self::Cpu => ExecutionDomain::Cpu,
+            Self::TokioBlocking => ExecutionDomain::TokioBlocking,
+        }
+    }
+
     fn configure(self, services: ExecutionServicesBuilder) -> ExecutionServicesBuilder {
         match self {
             Self::Blocking => services
@@ -145,16 +154,16 @@ async fn observe_gated_state(
     assert!(
         matches!(
             domain.submit_probe(services),
-            Err(ExecutionServicesSubmissionError::Rejected { source })
-                if format!("{source:?}") == "Shutdown"
+            Err(ExecutionServicesSubmissionError::Rejected { domain: actual_domain, source })
+                if actual_domain == domain.execution_domain() && format!("{source:?}") == "Shutdown"
         ),
         "new submissions must be rejected specifically as shutdown"
     );
     assert!(
         matches!(
             services.spawn_io(async { Ok::<(), io::Error>(()) }),
-            Err(ExecutionServicesSubmissionError::Rejected { source })
-                if format!("{source:?}") == "Shutdown"
+            Err(ExecutionServicesSubmissionError::Rejected { domain, source })
+                if domain == ExecutionDomain::Io && format!("{source:?}") == "Shutdown"
         ),
         "new IO submissions must also be rejected specifically as shutdown"
     );

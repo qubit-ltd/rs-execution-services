@@ -12,7 +12,6 @@ use tokio::sync::watch::Receiver;
 
 use super::capacity_change_receiver::CapacityChangeReceiver;
 use super::execution_services_admission::ExecutionServicesAdmission;
-use crate::ExecutionServicesSubmissionError;
 
 /// Submits a task until accepted, rejected, or facade admission closes.
 ///
@@ -43,7 +42,7 @@ pub(crate) async fn retry_submission<H, F>(
     admission: &ExecutionServicesAdmission,
     changes: Receiver<u64>,
     attempt: F,
-) -> Result<H, ExecutionServicesSubmissionError>
+) -> Result<H, SubmissionError>
 where
     H: Send,
     F: FnMut() -> Result<H, SubmissionError> + Send,
@@ -77,7 +76,7 @@ pub(crate) async fn retry_submission_with_changes<C, H, F>(
     admission: &ExecutionServicesAdmission,
     mut changes: C,
     mut attempt: F,
-) -> Result<H, ExecutionServicesSubmissionError>
+) -> Result<H, SubmissionError>
 where
     C: CapacityChangeReceiver,
     H: Send,
@@ -89,7 +88,7 @@ where
             Err(SubmissionError::Saturated) => {
                 changes.changed().await.map_err(|_| SubmissionError::Shutdown)?;
             }
-            Err(error) => return Err(error.into()),
+            Err(error) => return Err(error),
         }
     }
 }
@@ -101,7 +100,6 @@ mod tests {
 
     use super::ExecutionServicesAdmission;
     use super::retry_submission;
-    use crate::ExecutionServicesSubmissionError;
 
     #[tokio::test]
     async fn test_retry_returns_shutdown_when_capacity_channel_closes() {
@@ -111,11 +109,6 @@ mod tests {
 
         let result = retry_submission::<(), _>(&admission, changes, || Err(SubmissionError::Saturated)).await;
 
-        assert!(matches!(
-            result,
-            Err(ExecutionServicesSubmissionError::Rejected {
-                source: SubmissionError::Shutdown,
-            })
-        ));
+        assert_eq!(result, Err(SubmissionError::Shutdown));
     }
 }

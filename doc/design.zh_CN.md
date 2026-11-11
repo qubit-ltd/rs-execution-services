@@ -27,17 +27,17 @@ blocking、Tokio blocking 和 IO 的容量适配器使用 Tokio watch receiver�
 
 门面意图只有三种：`Running`、`ShuttingDown` 和 `Stopping`。shutdown 与 stop 都会先关闭准入，再通知各启用服务执行生命周期操作。stop 可以升级 graceful shutdown，不能被降级。
 
-立即提交与等待提交都先在准入检查中解析目标域。意图处于 `Running` 时，服务缺失会返回 `DomainDisabled`。准入关闭后，`Rejected { source: Shutdown }` 优先，即使请求的域未启用也是如此。native 提交、拒绝任务析构、用户 callable 执行和 future poll 都在准入互斥锁释放之后发生。
+立即提交与等待提交都先在准入检查中解析目标域。意图处于 `Running` 时，服务缺失会返回 `DomainDisabled`。准入关闭后，`Rejected { domain, source: Shutdown }` 优先，即使请求的域未启用也是如此。native 提交、拒绝任务析构、用户 callable 执行和 future poll 都在准入互斥锁释放之后发生。
 
 准入检查和底层服务接收不是一个原子事务。已通过门面检查的调用仍可能与 shutdown 或 stop 重叠；是否接收由底层服务决定。门面不保证多个独立服务之间的严格线性化。
 
 | 门面意图 | 执行域状态 | 立即提交 | 容量等待提交 |
 | --- | --- | --- | --- |
 | Running | 未启用 | `DomainDisabled` | `DomainDisabled` |
-| 已关闭 | 未启用或已启用 | `Rejected(Shutdown)` | `Rejected(Shutdown)` |
+| 已关闭 | 未启用或已启用 | `Rejected { domain, source: Shutdown }` | `Rejected { domain, source: Shutdown }` |
 | Running | 已启用且有容量 | 返回底层句柄 | 返回底层句柄 |
-| Running | 已启用且容量已满 | `Rejected(Saturated)` | Pending；收到通知后重试 |
-| 等待期间关闭 | 原本已启用 | 不适用 | 唤醒后重查准入，返回 `Rejected(Shutdown)` |
+| Running | 已启用且容量已满 | `Rejected { domain, source: Saturated }` | Pending；收到通知后重试 |
+| 等待期间关闭 | 原本已启用 | 不适用 | 唤醒后重查准入，返回 `Rejected { domain, source: Shutdown }` |
 
 ## 容量等待算法
 

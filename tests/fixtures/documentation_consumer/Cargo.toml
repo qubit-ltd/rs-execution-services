@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-qubit-execution-services = { path = "../../../", version = "^0.10" }
+qubit-execution-services = { path = "../../../", version = "^0.11" }
 tokio = { version = "^1.53", features = ["rt", "rt-multi-thread", "time"] }
 
 [workspace]

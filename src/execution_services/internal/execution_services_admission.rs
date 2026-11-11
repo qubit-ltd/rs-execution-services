@@ -143,7 +143,9 @@ impl ExecutionServicesAdmission {
         domain: ExecutionDomain,
         service: Option<&'a S>,
     ) -> Result<&'a S, ExecutionServicesSubmissionError> {
-        self.admit(|| service.ok_or(ExecutionServicesSubmissionError::DomainDisabled { domain }))
+        self.admit(|| Ok::<_, SubmissionError>(service))
+            .map_err(|source| ExecutionServicesSubmissionError::rejected(domain, source))?
+            .ok_or(ExecutionServicesSubmissionError::DomainDisabled { domain })
     }
 
     /// Requests graceful shutdown without downgrading an existing stop.

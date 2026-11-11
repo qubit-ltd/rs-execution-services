@@ -2,7 +2,7 @@
 
 [中文 README](../README.zh_CN.md) · [English user guide](user_guide.md) · [API 文档](https://docs.rs/qubit-execution-services)
 
-本文适用于 `qubit-execution-services` 0.10.1，要求 Rust 1.94 或更高版本。它面向需要在同一应用中安排同步阻塞工作、CPU 计算和异步任务的开发者。读到[检查报表结果](#检查报表结果)，即可完成一次业务任务；容量、监控和停机可在接入后按需查阅。只需要一种执行能力的组件，可以直接使用对应的底层 executor crate。
+本文适用于 `qubit-execution-services` 0.11.0，要求 Rust 1.94 或更高版本。它面向需要在同一应用中安排同步阻塞工作、CPU 计算和异步任务的开发者。读到[检查报表结果](#检查报表结果)，即可完成一次业务任务；容量、监控和停机可在接入后按需查阅。只需要一种执行能力的组件，可以直接使用对应的底层 executor crate。
 
 ## 它解决什么问题
 
@@ -22,7 +22,7 @@
 
 ```toml
 [dependencies]
-qubit-execution-services = "0.10.1"
+qubit-execution-services = "0.11.0"
 tokio = { version = "1.53", features = ["rt", "rt-multi-thread", "time"] }
 ```
 
@@ -364,7 +364,7 @@ Ok(save.await?)
 
 第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。另外三个方法是 `submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait`。这些 wait 方法是惰性 future，第一次被 poll 时才提交；开始首次尝试前会先订阅容量变化。通知只提示重新尝试，不会替某个等待者预留名额，因此不保证 FIFO、公平性或等待时间上限。
 
-facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
+facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { domain, source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { domain, source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
 
 三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。父任务等待同域子任务时，可能同时占用子任务需要的 worker 和未完成任务容量。CPU 或 Tokio blocking 的任务容量为 1 时，即使还有空闲 worker，父任务等待子任务提交也无法推进。IO 容量为 1 时，父任务等待同域子任务会占着唯一已接纳 future 名额，导致子任务无法获接纳。blocking 使用不同的队列容量口径：队列上限只统计等待任务，运行任务由 worker pool 限制。应把编排逻辑放在域外，或明确核算 worker 可用量、任务容量和依赖深度；详见[容量等待设计](design.zh_CN.md#容量等待算法)。单纯增加 worker 或容量不能证明任意递归依赖都安全。
 
@@ -372,7 +372,7 @@ facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop
 
 ### Tokio runtime 的归属
 
-builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，所有提交优先返回 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`，也包括未启用域。启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
+builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域，并配置其任务准入容量。只启用 blocking 或 CPU 时不需要 Tokio handle。runtime 和调度器参数由创建 runtime 的应用配置。准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，所有提交优先返回 `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }`，也包括未启用域。启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
 
 ### 有序关闭与强制停止
 
@@ -384,7 +384,7 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 
 ### 应用关闭顺序
 
-facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。关闭请求发出后，已接收任务仍可继续运行；但它们之后通过此 facade 提交子任务会收到 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`。因此，先停止报表入口，并等待所有可能继续提交子任务的生产者完成，再调用：
+facade 只协调已启用的执行域，不知道哪些业务组件还会提交任务，也不知道任务依赖哪些外部资源。关闭请求发出后，已接收任务仍可继续运行；但它们之后通过此 facade 提交子任务会收到 `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }`。因此，先停止报表入口，并等待所有可能继续提交子任务的生产者完成，再调用：
 
 ```rust
 services.shutdown();
@@ -403,9 +403,10 @@ assert!(services.is_terminated());
 ## 错误与诊断
 
 - `ExecutionServicesBuilder::build()` 在没有启用域时返回 `NoDomains`；对未启用域设置配置时返回 `ConfigurationForDisabledDomain`；启用 Tokio 域却未设置 runtime 时返回 `MissingTokioRuntime`；启用的 blocking 或 CPU builder 配置无效时返回对应错误。
-- 准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，提交优先返回 `ExecutionServicesSubmissionError::Rejected { source: SubmissionError::Shutdown }`；已启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
+- 准入开放时，提交到未启用域返回 `ExecutionServicesSubmissionError::DomainDisabled`。shutdown 或 stop 关闭准入后，提交优先返回 `ExecutionServicesSubmissionError::Rejected { domain, source: SubmissionError::Shutdown }`；已启用域的 `Saturated` 等拒绝原因保留在 `Rejected` 中。
 - 任务被接收后，通过对应 handle 获取执行结果。任务自身返回的错误与提交错误是两个阶段的问题；提交成功不代表任务执行成功。
 - 检查关闭结果时，读取 `ExecutionServicesStopReport` 中各启用域的 `Option<StopReport>`；该类型不提供跨域总数。
+- 0.11 版本为 `Rejected` 增加请求域，并移除无法获知域的 `From<SubmissionError>` 自动转换。精确匹配迁移为 `Rejected { domain, source }`；不关心域时可写 `Rejected { source, .. }`。配合 `?` 转换时使用 `.map_err(|source| ExecutionServicesSubmissionError::rejected(domain, source))?`，并把依赖版本要求从 `0.10` 更新为 `0.11`。
 
 ## 排障
 

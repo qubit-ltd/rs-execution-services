@@ -474,6 +474,6 @@ impl ExecutionServices {
         submit: impl FnOnce(&S) -> Result<R, SubmissionError>,
     ) -> Result<R, ExecutionServicesSubmissionError> {
         let service = self.admission.resolve_domain(domain, service)?;
-        submit(service).map_err(Into::into)
+        submit(service).map_err(|source| ExecutionServicesSubmissionError::rejected(domain, source))
     }
 }
