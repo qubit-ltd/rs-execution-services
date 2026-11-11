@@ -14,10 +14,7 @@ use std::task::Poll;
 
 use qubit_execution_services::ExecutionServices;
 
-async fn shutdown_after<F>(
-    services: &ExecutionServices,
-    work: F,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
@@ -54,8 +51,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutdown_after(&services, async {
             let blocking = services.submit_blocking_callable(|| Ok::<u8, io::Error>(40))?;
             let cpu = services.submit_cpu_callable(|| Ok::<u8, io::Error>(41))?;
-            let tokio_blocking =
-                services.submit_tokio_blocking_callable(|| Ok::<u8, io::Error>(42))?;
+            let tokio_blocking = services.submit_tokio_blocking_callable(|| Ok::<u8, io::Error>(42))?;
             let io = services.spawn_io(async { Ok::<u8, io::Error>(43) })?;
 
             assert_eq!(blocking.await?, 40);
@@ -70,29 +66,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             })?;
             tokio::task::yield_now().await;
             let waiting_value = String::from("one-shot IO task");
-            let waiting_io =
-                services.spawn_io_wait(async move { Ok::<usize, io::Error>(waiting_value.len()) });
+            let waiting_io = services.spawn_io_wait(async move { Ok::<usize, io::Error>(waiting_value.len()) });
             tokio::pin!(waiting_io);
-            let first_wait_poll =
-                std::future::poll_fn(|context| Poll::Ready(waiting_io.as_mut().poll(context)))
-                    .await;
+            let first_wait_poll = std::future::poll_fn(|context| Poll::Ready(waiting_io.as_mut().poll(context))).await;
             assert!(first_wait_poll.is_pending());
             assert_eq!(
-                services
-                    .snapshot()
-                    .io
-                    .expect("IO domain enabled")
-                    .accepted_unfinished,
+                services.snapshot().io.expect("IO domain enabled").accepted_unfinished,
                 1
             );
             release_tx.send(()).expect("IO producer should be released");
             assert_eq!(first_io.await?, 44);
             assert_eq!(waiting_io.await?.await?, 16);
             let snapshot = services.snapshot();
-            assert_eq!(
-                snapshot.io.expect("IO domain enabled").accepted_unfinished,
-                0
-            );
+            assert_eq!(snapshot.io.expect("IO domain enabled").accepted_unfinished, 0);
 
             Ok::<(), Box<dyn std::error::Error>>(())
         })
@@ -128,9 +114,7 @@ mod tests {
                 })
                 .expect("accepted work");
             let cleanup = shutdown_after(&services, async {
-                Err::<(), Box<dyn std::error::Error>>(Box::new(std::io::Error::other(
-                    "business failed",
-                )))
+                Err::<(), Box<dyn std::error::Error>>(Box::new(std::io::Error::other("business failed")))
             });
             tokio::pin!(cleanup);
             let observed = std::future::poll_fn(|cx| Poll::Ready(cleanup.as_mut().poll(cx))).await;

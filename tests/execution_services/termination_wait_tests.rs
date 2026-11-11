@@ -31,9 +31,7 @@ async fn test_managed_task_cannot_wait_for_its_own_termination() {
                 owned.shutdown();
                 let wait = owned.await_termination();
                 tokio::pin!(wait);
-                let pending =
-                    std::future::poll_fn(|cx| Poll::Ready(wait.as_mut().poll(cx).is_pending()))
-                        .await;
+                let pending = std::future::poll_fn(|cx| Poll::Ready(wait.as_mut().poll(cx).is_pending())).await;
                 let _ = observed_tx.send(pending);
                 let _ = release_rx.await;
                 Ok::<(), std::io::Error>(())
@@ -42,9 +40,7 @@ async fn test_managed_task_cannot_wait_for_its_own_termination() {
         assert!(observed_rx.await.expect("internal observation"));
         let external_wait = services.await_termination();
         tokio::pin!(external_wait);
-        let pending =
-            std::future::poll_fn(|cx| Poll::Ready(external_wait.as_mut().poll(cx).is_pending()))
-                .await;
+        let pending = std::future::poll_fn(|cx| Poll::Ready(external_wait.as_mut().poll(cx).is_pending())).await;
         assert!(pending);
         release_tx.send(()).expect("release managed task");
         task.await.expect("task exits");

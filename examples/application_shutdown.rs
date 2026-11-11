@@ -17,10 +17,7 @@ use std::sync::Arc;
 use qubit_execution_services::ExecutionServices;
 use tokio::sync::oneshot;
 
-async fn shutdown_after<F>(
-    services: &ExecutionServices,
-    work: F,
-) -> Result<(), Box<dyn std::error::Error>>
+async fn shutdown_after<F>(services: &ExecutionServices, work: F) -> Result<(), Box<dyn std::error::Error>>
 where
     F: Future<Output = Result<(), Box<dyn std::error::Error>>>,
 {
@@ -31,9 +28,7 @@ where
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build()?;
     runtime.block_on(async {
         let services = Arc::new(
             ExecutionServices::builder()
@@ -61,9 +56,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             // The application stops new producers, then lets this accepted producer
             // submit and await its CPU child before closing the facade.
             started_rx.await?;
-            release_tx
-                .send(())
-                .map_err(|_| io::Error::other("producer stopped"))?;
+            release_tx.send(()).map_err(|_| io::Error::other("producer stopped"))?;
             assert_eq!(producer.await?, 42);
 
             Ok::<(), Box<dyn std::error::Error>>(())
@@ -100,9 +93,7 @@ mod tests {
                 })
                 .expect("accepted work");
             let cleanup = shutdown_after(&services, async {
-                Err::<(), Box<dyn std::error::Error>>(Box::new(std::io::Error::other(
-                    "business failed",
-                )))
+                Err::<(), Box<dyn std::error::Error>>(Box::new(std::io::Error::other("business failed")))
             });
             tokio::pin!(cleanup);
             let observed = std::future::poll_fn(|cx| Poll::Ready(cleanup.as_mut().poll(cx))).await;
