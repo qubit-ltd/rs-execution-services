@@ -40,17 +40,17 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-executor
-          ref: 96c6006e5f6e5d59959695893d7f4e8697d21a54
+          ref: 92e7e6abf8010df4846ae2e1649d6aab535c55aa
           path: rs-executor
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-rayon-executor
-          ref: 2caaa944acf2fb4dab977200b517ba1f59a759ce
+          ref: a73b03439f90ece66ba43a891a9f2fed9830f751
           path: rs-rayon-executor
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-tokio-executor
-          ref: ca18599285e372da3f0074aba69e687ecc3af4a0
+          ref: a86d997236b951be8d694d2bed075d3dabfbbb96
           path: rs-tokio-executor
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:

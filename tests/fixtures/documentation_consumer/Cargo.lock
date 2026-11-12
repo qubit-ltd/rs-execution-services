@@ -168,7 +168,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-execution-services"
-version = "0.11.1"
+version = "0.11.2"
 dependencies = [
  "qubit-executor",
  "qubit-function",
@@ -189,7 +189,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-executor"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "log",
  "oneshot",
@@ -227,7 +227,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-rayon-executor"
-version = "0.9.1"
+version = "0.9.2"
 dependencies = [
  "parking_lot",
  "qubit-executor",
@@ -239,9 +239,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-state-machine"
-version = "0.11.4"
+version = "0.11.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8d1b1db5c9341c2861a0242ffa4d53d62fe507f57e28a1127dd4353eeea27c2a"
+checksum = "9e56a0be1c20692eec5dd59695b1fa3e8416b2a2fb20a5c3086ad301926e4fce"
 dependencies = [
  "qubit-fast-cas",
  "thiserror",
@@ -249,9 +249,9 @@ dependencies = [
 
 [[package]]
 name = "qubit-thread-pool"
-version = "0.12.2"
+version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fb34ca2a35d5833e96beab04e0c65a797d7ddbd038e2db17db64115d56043030"
+checksum = "1e87e83d879a48e47c1fc54f789ead0123646869290c5d8a2789c4b399950e52"
 dependencies = [
  "crossbeam-deque",
  "qubit-argument",
@@ -264,7 +264,7 @@ dependencies = [
 
 [[package]]
 name = "qubit-tokio-executor"
-version = "0.12.1"
+version = "0.12.2"
 dependencies = [
  "parking_lot",
  "qubit-atomic",
