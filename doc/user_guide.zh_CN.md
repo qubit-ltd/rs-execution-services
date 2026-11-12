@@ -362,9 +362,9 @@ let save = services.spawn_io_wait(async move {
 Ok(save.await?)
 ```
 
-第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。另外三个方法是 `submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait`。这些 wait 方法是惰性 future，第一次被 poll 时才提交；开始首次尝试前会先订阅容量变化。通知只提示重新尝试，不会替某个等待者预留名额，因此不保证 FIFO、公平性或等待时间上限。
+第一次 `.await` 等待任务**获接纳**，第二次 `.await` 等待存储**执行完成**。另外三个方法是 `submit_blocking_callable_wait`、`submit_cpu_callable_wait` 和 `submit_tokio_blocking_callable_wait`。这些 wait 方法是惰性 future，第一次被 poll 时才提交；开始首次尝试前会先订阅门面关闭和容量变化。shutdown 或 stop 发布关闭信号后，仍被执行器调度的等待者可直接返回 `Rejected { domain, source: Shutdown }`，无需等待容量变化或 `stop()` 按顺序完成各域清理。这不限制同步 stop、用户析构或执行器调度所需时间。容量通知只提示重新尝试，不会替某个等待者预留名额，因此不保证 FIFO、公平性或等待时间上限。
 
-facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { domain, source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { domain, source: Saturated }`，wait 方法则等待通知后重试。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
+facade 正在运行时，未启用域返回 `DomainDisabled`；shutdown 或 stop 已关闭准入后，所有提交优先返回 `Rejected { domain, source: Shutdown }`，包括目标域未启用的等待方法。容量已满时，立即提交返回 `Rejected { domain, source: Saturated }`，wait 方法在容量变化后重试，并在收到门面关闭通知后返回 Shutdown。丢弃尚未获接纳的等待 future 会释放其任务；这类等待者不计入域任务容量或 `snapshot().accepted_unfinished`。若需限制等待者内存，应由应用限制并发提交数或设置超时。
 
 三个同步域的 wait 返回 `TaskHandle`，只能观察完成结果，没有 `cancel()`；丢弃结果句柄不会取消任务。IO wait 返回 `TokioTaskHandle`，可以请求 abort，但可能与正常完成竞争。已开始的同步工作不能被强制中断。父任务等待同域子任务时，可能同时占用子任务需要的 worker 和未完成任务容量。CPU 或 Tokio blocking 的任务容量为 1 时，即使还有空闲 worker，父任务等待子任务提交也无法推进。IO 容量为 1 时，父任务等待同域子任务会占着唯一已接纳 future 名额，导致子任务无法获接纳。blocking 使用不同的队列容量口径：队列上限只统计等待任务，运行任务由 worker pool 限制。应把编排逻辑放在域外，或明确核算 worker 可用量、任务容量和依赖深度；详见[容量等待设计](design.zh_CN.md#容量等待算法)。单纯增加 worker 或容量不能证明任意递归依赖都安全。
 
@@ -376,7 +376,7 @@ builder 把传入的 `tokio::runtime::Handle` 交给已启用的 Tokio 执行域
 
 ### 有序关闭与强制停止
 
-`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图，然后只对已启用域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，已启用域都拒绝新的 facade 提交。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`：启用域字段为 `Some(StopReport)`，未启用域字段为 `None`。取消排队任务时，可能在 stop 调用线程同步析构用户捕获值；清理没有固定耗时上限，也可能延迟后续执行域收到 stop 请求。报告不提供跨域总数，各域依次取样。析构应短且不阻塞；异步 timeout 不能抢占同步 `stop()` 调用。需要异步清理时应由仍存活的所有者驱动；不要在本服务清理中同步等待其终止，因为终止可能依赖这段清理。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。应按各域的停止契约解释计数。
+`shutdown()` 和 `stop()` 首先记录 facade 关闭准入的意图并发布关闭通知，然后只对已启用域请求对应操作。已经通过准入检查的提交可能与逐域 shutdown 或 stop 重叠，其接收或拒绝由对应底层执行域决定。任一操作返回后，已启用域都拒绝新的 facade 提交。关闭后仍被执行器调度的容量等待者可直接返回 Shutdown，无需等待容量变化或 `stop()` 按顺序完成各域清理。`shutdown()` 要求已接收任务按照底层服务的行为完成；`stop()` 请求强制停止并返回 `ExecutionServicesStopReport`：启用域字段为 `Some(StopReport)`，未启用域字段为 `None`。取消排队任务时，可能在 stop 调用线程同步析构用户捕获值；清理没有固定耗时上限，也可能延迟后续执行域收到 stop 请求。报告不提供跨域总数，各域依次取样。析构应短且不阻塞；异步 timeout 不能抢占同步 `stop()` 调用。需要异步清理时应由仍存活的所有者驱动；不要在本服务清理中同步等待其终止，因为终止可能依赖这段清理。Tokio IO 的 `running` 字段表示 stop 时已接收但尚未完成的 future，不代表该时刻正在 poll 的 future。关闭通知不限制同步 stop、用户清理或等待者调度所需时间。应按各域的停止契约解释计数。
 
 `await_termination()` 通过异步通知等待已启用执行域，不占用 Tokio blocking 线程。它可以由异步执行器轮询；builder 收到的 Tokio runtime 仍须持续运行，直到其中已接收的任务结束。在另一个 runtime 中 await 不会驱动已经停止运行的 current-thread runtime。丢弃等待 future 会释放该次等待的资源，不会停止服务。调用 shutdown 或 stop 之前，等待会保持未完成。不要在此 facade 管理的任务内等待服务终止：即使已经请求 shutdown 或 stop，该任务自身完成仍可能是其执行域终止的必要条件。应由受管理任务之外的生命周期所有者驱动等待。
 

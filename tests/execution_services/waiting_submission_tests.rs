@@ -58,8 +58,8 @@ struct CleanupProbe {
 impl Drop for CleanupProbe {
     fn drop(&mut self) {
         self.drops.fetch_add(1, Ordering::SeqCst);
-        self.entered.send(()).expect("cleanup observer should be listening");
-        self.release.recv().expect("cancelled capture cleanup gate should open");
+        let _ = self.entered.send(());
+        let _ = self.release.recv();
     }
 }
 
@@ -1806,6 +1806,107 @@ async fn test_stopping_a_full_capacity_wait_rejects_and_drops_the_unaccepted_tas
     timeout(TEST_TIMEOUT, services.await_termination())
         .await
         .expect("services should terminate before the diagnostic timeout");
+}
+
+#[tokio_test(flavor = "multi_thread", worker_threads = 2)]
+async fn test_io_wait_observes_facade_close_while_cpu_stop_cleanup_is_blocked() {
+    let services = Arc::new(
+        ExecutionServices::builder()
+            .enable_cpu()
+            .cpu_threads(1)
+            .cpu_task_capacity(2)
+            .enable_io()
+            .runtime(Handle::current())
+            .io_task_capacity(NonZeroUsize::new(1).unwrap())
+            .build()
+            .unwrap(),
+    );
+
+    let (cpu_release, cpu_gate) = mpsc_gate();
+    let (cpu_started_tx, cpu_started_rx) = mpsc::channel();
+    let _running_cpu = services
+        .submit_cpu_callable(move || {
+            cpu_started_tx.send(()).unwrap();
+            let _ = cpu_gate.recv_timeout(TEST_TIMEOUT);
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+    cpu_started_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("CPU worker should be occupied before queueing cleanup");
+
+    let (cleanup_entered_tx, cleanup_entered_rx) = mpsc::channel();
+    let (cleanup_release_tx, cleanup_release_rx) = mpsc::channel();
+    let cleanup_drops = Arc::new(AtomicUsize::new(0));
+    let cleanup_probe = CleanupProbe {
+        entered: cleanup_entered_tx,
+        release: cleanup_release_rx,
+        drops: Arc::clone(&cleanup_drops),
+    };
+    let mut cleanup_probe = Some(cleanup_probe);
+    let _queued_cpu = services
+        .submit_cpu_callable(move || {
+            let _cleanup_probe = cleanup_probe.take().expect("queued CPU task runs once");
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+
+    let (io_release, io_gate) = oneshot_gate();
+    let _running_io = services
+        .spawn_io(async move {
+            let _ = io_gate.await;
+            Ok::<(), io::Error>(())
+        })
+        .unwrap();
+
+    let waiter_drops = Arc::new(AtomicUsize::new(0));
+    let waiter_calls = Arc::new(AtomicUsize::new(0));
+    let drop_counter = DropCounter(Arc::clone(&waiter_drops));
+    let calls = Arc::clone(&waiter_calls);
+    let mut waiter = Box::pin(services.spawn_io_wait(async move {
+        let _drop_counter = drop_counter;
+        calls.fetch_add(1, Ordering::SeqCst);
+        Ok::<(), io::Error>(())
+    }));
+    assert!(poll_once(waiter.as_mut()).await.is_pending());
+
+    let stop_services = Arc::clone(&services);
+    let (stop_finished_tx, stop_finished_rx) = mpsc::channel();
+    let stop_thread = std::thread::spawn(move || {
+        let _stop_report = stop_services.stop();
+        let _ = stop_finished_tx.send(());
+    });
+    cleanup_entered_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("CPU queued-task cleanup should block the stop thread");
+    assert_eq!(cleanup_drops.load(Ordering::SeqCst), 1);
+    assert!(!stop_thread.is_finished(), "stop should remain blocked on CPU cleanup");
+
+    assert!(matches!(
+        poll_once(waiter.as_mut()).await,
+        Poll::Ready(Err(ExecutionServicesSubmissionError::Rejected {
+            domain: ExecutionDomain::Io,
+            source: SubmissionError::Shutdown,
+        }))
+    ));
+    assert_eq!(waiter_calls.load(Ordering::SeqCst), 0);
+    assert_eq!(waiter_drops.load(Ordering::SeqCst), 1);
+
+    drop(waiter);
+    let _ = cleanup_release_tx.send(());
+    let mut cpu_release = cpu_release;
+    cpu_release.release();
+    let mut io_release = io_release;
+    io_release.release();
+    stop_finished_rx
+        .recv_timeout(TEST_TIMEOUT)
+        .expect("stop should finish after all cleanup gates open");
+    stop_thread
+        .join()
+        .expect("stop thread should finish after all cleanup gates open");
+    timeout(TEST_TIMEOUT, services.await_termination())
+        .await
+        .expect("services should terminate after cleanup gates open");
 }
 
 #[tokio_test]

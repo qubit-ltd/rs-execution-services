@@ -6,6 +6,13 @@
 //    Licensed under the Apache License, Version 2.0.
 // =============================================================================
 //! Capacity-waiting submission APIs for the execution-services facade.
+//!
+//! All wait APIs subscribe to facade closure and their domain's capacity
+//! changes before the first attempt. Once shutdown or stop publishes closure,
+//! a waiter that is polled again can return Shutdown without waiting for
+//! capacity to change or for sequential domain cleanup in `stop()` to finish.
+//! This does not bound the synchronous stop call, user destructors, or the
+//! time until the executor schedules the waiter.
 
 use std::future::Future;
 

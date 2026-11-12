@@ -15,8 +15,8 @@
 - `execution_services.rs` 管理门面、Builder 入口、执行域清单和快照组合。
 - `submission.rs` 实现立即提交和共享 native 提交适配。
 - `waiting_submission.rs` 实现四个容量等待 API。四个域共享重试控制流；blocking 使用任务所有权包装器，CPU、Tokio blocking 和 IO 则通过原生拒绝值取回任务。
-- `internal/execution_services_admission.rs` 管理单调关闭的门面意图并解析请求域。
-- `internal/submission_retry.rs` 通过 `CapacityChangeReceiver` 为四个域共用重试控制流；提交饱和后等待容量变化通知，再发起下一次尝试。
+- `internal/execution_services_admission.rs` 管理单调关闭的门面意图，发布持久的 watch 关闭通知，并解析请求域。
+- `internal/submission_retry.rs` 通过 `CapacityChangeReceiver` 为四个域共用重试控制流；提交饱和后同时等待门面关闭或容量变化，再发起下一次尝试。
 - `internal/capacity_change_receiver.rs` 将各域原生通知源适配到共享重试循环。blocking、Tokio blocking 和 IO 使用 Tokio watch receiver；CPU 保留 Rayon 的 `CapacityChangesChanged` 包装器，以隔离 waker panic。
 - `internal/owned_wait_task.rs` 在拒绝的尝试包装被释放后继续持有 blocking callable。
 - `lifecycle.rs` 关闭各启用域，并通过异步通知等待终止。
@@ -37,11 +37,11 @@ blocking、Tokio blocking 和 IO 的容量适配器使用 Tokio watch receiver�
 | 已关闭 | 未启用或已启用 | `Rejected { domain, source: Shutdown }` | `Rejected { domain, source: Shutdown }` |
 | Running | 已启用且有容量 | 返回底层句柄 | 返回底层句柄 |
 | Running | 已启用且容量已满 | `Rejected { domain, source: Saturated }` | Pending；收到通知后重试 |
-| 等待期间关闭 | 原本已启用 | 不适用 | 唤醒后重查准入，返回 `Rejected { domain, source: Shutdown }` |
+| 等待期间关闭 | 原本已启用 | 不适用 | 关闭通知独立于容量变化唤醒等待者；重查准入后返回 `Rejected { domain, source: Shutdown }` |
 
 ## 容量等待算法
 
-wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第一次提交尝试前订阅容量变化。blocking 将 callable 放入 `OwnedWaitTask`，每次尝试使用新的包装器；CPU、Tokio blocking 和 IO 则由等待 future 持有原 callable 或 future，并使用原生 `try_*` API 在拒绝时取回任务。四个 API 在接纳后返回句柄，仅在饱和并收到容量变化通知后重试，其他错误立即返回。若通知通道关闭，等待会返回 Shutdown，不会永久 Pending。
+wait API 返回惰性 future。首次 poll 时，它解析目标域，并在第一次提交尝试前订阅门面关闭和容量变化。blocking 将 callable 放入 `OwnedWaitTask`，每次尝试使用新的包装器；CPU、Tokio blocking 和 IO 则由等待 future 持有原 callable 或 future，并使用原生 `try_*` API 在拒绝时取回任务。四个 API 在接纳后返回句柄；饱和后，容量变化或门面关闭都会触发重新检查，其他错误立即返回。门面关闭通知不依赖域容量变化，也不等待 `stop()` 按顺序完成各域清理。等待者仍须被执行器调度才能观察信号；这不限制同步 stop、用户析构或执行器调度所需时间。任一通知通道关闭时，等待会返回 Shutdown，不会永久 Pending。
 
 容量通知只说明状态发生变化，不会为等待者保留额度。其他提交者可能先取得可用容量。系统不保证 FIFO、公平性或等待时间上限。
 

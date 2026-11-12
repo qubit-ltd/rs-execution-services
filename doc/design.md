@@ -15,8 +15,8 @@ Each domain owns its own capacity and queue. The facade is not a shared schedule
 - `execution_services.rs` owns the facade, builder entry point, domain inventory, and snapshot composition.
 - `submission.rs` implements immediate submission and the shared native submission adapter.
 - `waiting_submission.rs` implements the four capacity-wait APIs. All four domains share the retry control flow; blocking uses the owned-task wrapper, while CPU, Tokio blocking, and IO recover tasks through their native task-returning rejection APIs.
-- `internal/execution_services_admission.rs` owns monotonic facade intent and resolves a requested optional domain.
-- `internal/submission_retry.rs` shares the retry control flow across all four domains through `CapacityChangeReceiver`, waiting for a capacity-change notification between saturated attempts.
+- `internal/execution_services_admission.rs` owns monotonic facade intent, publishes a persistent watch notification when admission closes, and resolves a requested optional domain.
+- `internal/submission_retry.rs` shares the retry control flow across all four domains through `CapacityChangeReceiver`, waiting for either admission closure or a capacity-change notification between saturated attempts.
 - `internal/capacity_change_receiver.rs` adapts native notification sources to the shared retry loop. Blocking, Tokio blocking, and IO use Tokio watch receivers; CPU retains Rayon's `CapacityChangesChanged` wrapper to preserve waker panic isolation.
 - `internal/owned_wait_task.rs` retains the blocking callable while rejected attempt wrappers are dropped.
 - `lifecycle.rs` closes each enabled domain and asynchronously waits for termination.
@@ -37,11 +37,11 @@ Admission and native acceptance are not one atomic transaction. A call that pass
 | Closed | Disabled or enabled | `Rejected { domain, source: Shutdown }` | `Rejected { domain, source: Shutdown }` |
 | Running | Enabled with available capacity | Native handle | Native handle |
 | Running | Enabled at capacity | `Rejected { domain, source: Saturated }` | Pending; retry after notification |
-| Closed during a wait | Previously enabled | Not applicable | Wake, recheck admission, return `Rejected { domain, source: Shutdown }` |
+| Closed during a wait | Previously enabled | Not applicable | Closure notification wakes the waiter independently of capacity changes; recheck admission and return `Rejected { domain, source: Shutdown }` |
 
 ## Capacity-wait algorithm
 
-A wait API returns a lazy future. It starts when first polled, resolves the domain, and subscribes to capacity changes before its first submission attempt. Blocking stores the callable in `OwnedWaitTask` and uses a fresh wrapper for each attempt; CPU, Tokio blocking, and IO retain the original callable or future in the waiting future and use native `try_*` APIs that return that task when rejected. All four return a handle after acceptance, retry only after saturation and a capacity-change notification, and return other errors immediately. If the notification channel closes, the wait returns Shutdown instead of remaining pending forever.
+A wait API returns a lazy future. It starts when first polled, resolves the domain, and subscribes to both closure and capacity changes before its first submission attempt. Blocking stores the callable in `OwnedWaitTask` and uses a fresh wrapper for each attempt; CPU, Tokio blocking, and IO retain the original callable or future in the waiting future and use native `try_*` APIs that return that task when rejected. All four return a handle after acceptance, retry after saturation when either capacity changes or facade closure is published, and return other errors immediately. Closure wakes a waiter without waiting for a domain capacity change or for sequential domain cleanup in `stop()` to finish. The waiter must be scheduled to observe the signal, and this does not bound synchronous stop, user destructors, or executor scheduling time. If either notification channel closes, the wait returns Shutdown instead of remaining pending forever.
 
 Capacity notifications are advisory: they indicate a state change, not a reservation. A competing submitter can consume the available capacity before a waiter retries. No FIFO ordering, fairness, or wait-time bound is guaranteed.
 

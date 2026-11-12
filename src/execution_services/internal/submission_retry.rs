@@ -82,11 +82,23 @@ where
     H: Send,
     F: FnMut() -> Result<H, SubmissionError> + Send,
 {
+    let mut closed = admission.closure_changes();
     loop {
+        if *closed.borrow_and_update() {
+            return Err(SubmissionError::Shutdown);
+        }
         match admission.admit(&mut attempt) {
             Ok(handle) => return Ok(handle),
             Err(SubmissionError::Saturated) => {
-                changes.changed().await.map_err(|_| SubmissionError::Shutdown)?;
+                tokio::select! {
+                    biased;
+                    result = closed.changed() => {
+                        result.map_err(|_| SubmissionError::Shutdown)?;
+                    }
+                    result = changes.changed() => {
+                        result.map_err(|_| SubmissionError::Shutdown)?;
+                    }
+                }
             }
             Err(error) => return Err(error),
         }
@@ -95,11 +107,19 @@ where
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
+    use std::task::Poll;
+
     use qubit_executor::service::SubmissionError;
     use tokio::sync::watch;
 
     use super::ExecutionServicesAdmission;
     use super::retry_submission;
+    use super::retry_submission_with_changes;
+
+    async fn poll_once<F: Future>(future: &mut std::pin::Pin<Box<F>>) -> Poll<F::Output> {
+        std::future::poll_fn(|cx| Poll::Ready(future.as_mut().poll(cx))).await
+    }
 
     #[tokio::test]
     async fn test_retry_returns_shutdown_when_capacity_channel_closes() {
@@ -110,5 +130,57 @@ mod tests {
         let result = retry_submission::<(), _>(&admission, changes, || Err(SubmissionError::Saturated)).await;
 
         assert_eq!(result, Err(SubmissionError::Shutdown));
+    }
+
+    #[tokio::test]
+    async fn test_retry_observes_shutdown_without_capacity_change() {
+        let admission = ExecutionServicesAdmission::new();
+        let (_sender, changes) = watch::channel(0);
+        let mut future = Box::pin(retry_submission_with_changes::<_, (), _>(&admission, changes, || {
+            Err(SubmissionError::Saturated)
+        }));
+
+        assert!(poll_once(&mut future).await.is_pending());
+        admission.request_shutdown();
+        assert_eq!(
+            poll_once(&mut future).await,
+            Poll::Ready(Err(SubmissionError::Shutdown))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_observes_stop_without_capacity_change() {
+        let admission = ExecutionServicesAdmission::new();
+        let (_sender, changes) = watch::channel(0);
+        let mut future = Box::pin(retry_submission_with_changes::<_, (), _>(&admission, changes, || {
+            Err(SubmissionError::Saturated)
+        }));
+
+        assert!(poll_once(&mut future).await.is_pending());
+        admission.request_stop();
+        assert_eq!(
+            poll_once(&mut future).await,
+            Poll::Ready(Err(SubmissionError::Shutdown))
+        );
+    }
+
+    #[tokio::test]
+    async fn test_retry_observes_close_between_admission_check_and_wait() {
+        let admission = ExecutionServicesAdmission::new();
+        let (_sender, changes) = watch::channel(0);
+        let attempt_admission = &admission;
+        let mut future = Box::pin(retry_submission_with_changes::<_, (), _>(
+            &admission,
+            changes,
+            move || {
+                attempt_admission.request_shutdown();
+                Err(SubmissionError::Saturated)
+            },
+        ));
+
+        assert_eq!(
+            poll_once(&mut future).await,
+            Poll::Ready(Err(SubmissionError::Shutdown))
+        );
     }
 }

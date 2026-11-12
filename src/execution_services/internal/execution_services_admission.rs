@@ -12,6 +12,9 @@ use std::sync::MutexGuard;
 
 use qubit_executor::service::ExecutorServiceLifecycle;
 use qubit_executor::service::SubmissionError;
+use tokio::sync::watch;
+use tokio::sync::watch::Receiver;
+use tokio::sync::watch::Sender;
 
 use super::facade_intent::FacadeIntent;
 use crate::ExecutionDomain;
@@ -39,6 +42,8 @@ pub struct ExecutionServicesAdmission {
     /// Current aggregate intent, protected while admission is checked or
     /// updated.
     intent: Mutex<FacadeIntent>,
+    /// Persistent, monotonic notification that aggregate admission has closed.
+    closed: Sender<bool>,
 }
 
 impl ExecutionServicesAdmission {
@@ -50,9 +55,21 @@ impl ExecutionServicesAdmission {
     #[must_use]
     #[inline]
     pub fn new() -> Self {
+        let (closed, _receiver) = watch::channel(false);
         Self {
             intent: Mutex::new(FacadeIntent::Running),
+            closed,
         }
+    }
+
+    /// Subscribes to the aggregate admission closure notification.
+    ///
+    /// The receiver observes the current closed state even when closure was
+    /// requested before the subscription was created.
+    #[must_use]
+    #[inline]
+    pub fn closure_changes(&self) -> Receiver<bool> {
+        self.closed.subscribe()
     }
 
     /// Returns the current aggregate shutdown intent.
@@ -151,16 +168,22 @@ impl ExecutionServicesAdmission {
     /// Requests graceful shutdown without downgrading an existing stop.
     #[inline]
     pub fn request_shutdown(&self) {
-        let mut intent = lock_intent(&self.intent);
-        if *intent == FacadeIntent::Running {
-            *intent = FacadeIntent::ShuttingDown;
+        {
+            let mut intent = lock_intent(&self.intent);
+            if *intent == FacadeIntent::Running {
+                *intent = FacadeIntent::ShuttingDown;
+            }
         }
+        self.closed.send_replace(true);
     }
 
     /// Records an abrupt stop request, upgrading any graceful shutdown intent.
     #[inline]
     pub fn request_stop(&self) {
-        *lock_intent(&self.intent) = FacadeIntent::Stopping;
+        {
+            *lock_intent(&self.intent) = FacadeIntent::Stopping;
+        }
+        self.closed.send_replace(true);
     }
 }
 
@@ -201,8 +224,13 @@ fn aggregate_lifecycle(
 
 #[cfg(test)]
 mod tests {
+    use std::future::Future;
     use std::panic::catch_unwind;
+    use std::sync::Arc;
     use std::sync::Mutex;
+    use std::task::Wake;
+    use std::task::Waker;
+    use std::time::Duration;
 
     use qubit_executor::service::ExecutorServiceLifecycle;
     use qubit_executor::service::SubmissionError;
@@ -211,6 +239,75 @@ mod tests {
     use super::FacadeIntent;
     use super::aggregate_lifecycle;
     use super::lock_intent;
+
+    struct IntentWaker {
+        admission: Arc<ExecutionServicesAdmission>,
+        woke: std::sync::mpsc::Sender<FacadeIntent>,
+    }
+
+    impl Wake for IntentWaker {
+        fn wake(self: Arc<Self>) {
+            let _ = self.woke.send(self.admission.intent());
+        }
+
+        fn wake_by_ref(self: &Arc<Self>) {
+            let _ = self.woke.send(self.admission.intent());
+        }
+    }
+
+    #[test]
+    fn test_closure_changes_persist_and_notify_all_subscribers() {
+        let admission = ExecutionServicesAdmission::new();
+        admission.request_shutdown();
+        let mut first = admission.closure_changes();
+        let mut second = admission.closure_changes();
+        assert!(*first.borrow_and_update());
+        assert!(*second.borrow_and_update());
+
+        admission.request_stop();
+        assert!(first.has_changed().expect("receiver remains open"));
+        assert!(second.has_changed().expect("receiver remains open"));
+        first.borrow_and_update();
+        second.borrow_and_update();
+
+        admission.request_shutdown();
+        assert!(admission.intent() == FacadeIntent::Stopping);
+        assert!(*first.borrow_and_update());
+        assert!(*second.borrow_and_update());
+    }
+
+    #[test]
+    fn test_close_signal_is_published_without_receivers() {
+        let admission = ExecutionServicesAdmission::new();
+        admission.request_stop();
+        assert!(*admission.closure_changes().borrow());
+    }
+
+    #[test]
+    fn test_closure_wakes_without_holding_intent_mutex() {
+        let admission = Arc::new(ExecutionServicesAdmission::new());
+        let (woke, result) = std::sync::mpsc::channel();
+        let worker_admission = Arc::clone(&admission);
+        let worker = std::thread::spawn(move || {
+            let mut receiver = worker_admission.closure_changes();
+            let waker = Waker::from(Arc::new(IntentWaker {
+                admission: Arc::clone(&worker_admission),
+                woke,
+            }));
+            let mut context = std::task::Context::from_waker(&waker);
+            let changed = receiver.changed();
+            let mut changed = std::pin::pin!(changed);
+            assert!(changed.as_mut().poll(&mut context).is_pending());
+            worker_admission.request_shutdown();
+        });
+        assert!(
+            result
+                .recv_timeout(Duration::from_secs(1))
+                .expect("wake callback must complete")
+                == FacadeIntent::ShuttingDown
+        );
+        worker.join().expect("close publisher should finish");
+    }
 
     #[test]
     fn test_aggregate_lifecycle_preserves_stop_intent_until_all_domains_terminate() {
