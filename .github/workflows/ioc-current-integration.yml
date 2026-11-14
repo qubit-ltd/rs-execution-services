@@ -31,7 +31,7 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           repository: qubit-ltd/rs-tokio-executor
-          ref: ca18599285e372da3f0074aba69e687ecc3af4a0
+          ref: 211218cfdc47bfb1e309d47ff9e3c93fc86abc3f
           path: rs-tokio-executor
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
