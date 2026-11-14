@@ -1,4 +1,0 @@
-[patch.crates-io]
-qubit-executor = { path = "../rs-executor" }
-qubit-rayon-executor = { path = "../rs-rayon-executor" }
-qubit-tokio-executor = { path = "../rs-tokio-executor" }
