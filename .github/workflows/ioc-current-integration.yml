@@ -90,7 +90,7 @@ jobs:
         working-directory: rs-execution-services
         run: |
           mkdir -p ../rs-ioc/.cargo
-          cp .cargo/config.toml ../rs-ioc/.cargo/config.toml
+          cp .infra/ci/ioc-cargo-patches.toml ../rs-ioc/.cargo/config.toml
           cp tests/fixtures/ioc_application_consumer_current/Cargo.lock ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.lock
       - name: Record exact source revisions and hashes
         run: |
