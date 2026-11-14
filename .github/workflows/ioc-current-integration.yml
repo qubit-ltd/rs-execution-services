@@ -119,11 +119,11 @@ jobs:
         working-directory: rs-execution-services
         run: python3 ../rs-ioc/.infra/tools/check-manual-feature-isolation.py --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --package ioc-downstream-consumer-current
       - name: Check downstream consumer against this IoC revision
-        working-directory: rs-execution-services
-        run: cargo +1.94.0 check --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-ioc
+        run: cargo +1.94.0 check --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
       - name: Test downstream consumer against this IoC revision
-        working-directory: rs-execution-services
-        run: cargo +1.94.0 test --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-ioc
+        run: cargo +1.94.0 test --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
       - name: Run downstream consumer against this IoC revision
-        working-directory: rs-execution-services
-        run: cargo +1.94.0 run --manifest-path ../rs-ioc/tests/fixtures/application_consumer_current/Cargo.toml --locked
+        working-directory: rs-ioc
+        run: cargo +1.94.0 run --manifest-path tests/fixtures/application_consumer_current/Cargo.toml --locked
