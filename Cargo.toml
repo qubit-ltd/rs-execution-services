@@ -36,7 +36,7 @@ qubit-function = "^0.18"
 qubit-executor = { version = "^0.9" }
 qubit-rayon-executor = { version = "^0.9", features = ["async-wait"] }
 qubit-tokio-executor = { version = "^0.12" }
-qubit-thread-pool = { version = "^0.12", features = ["async-wait"] }
+qubit-thread-pool = { "version" = "0.12.4", "features" = ["async-wait"] }
 
 [dev-dependencies]
 tokio = { version = "^1.54", features = ["macros", "rt-multi-thread", "time"] }
