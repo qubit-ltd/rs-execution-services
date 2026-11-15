@@ -343,6 +343,8 @@ dependencies = [
 [[package]]
 name = "qubit-fs-local"
 version = "0.11.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0d3f69807608b26a4c5a0cc818be3ed688debe5e702186bf8405dd01e480f17"
 dependencies = [
  "qubit-fs",
  "qubit-fs-registry",
@@ -392,6 +394,8 @@ dependencies = [
 [[package]]
 name = "qubit-ioc"
 version = "0.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0dd55f59374d1b061ac1965fc7abaed2ee86dd7585a48e40073a2e36314ea8b2"
 dependencies = [
  "thiserror",
 ]
