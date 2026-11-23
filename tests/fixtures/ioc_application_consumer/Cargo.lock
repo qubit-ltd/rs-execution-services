@@ -332,19 +332,18 @@ checksum = "f9d0addbf59ca007f40e3adf0d9faef30b946f42bfb0a59b1b4276920a0bfa54"
 
 [[package]]
 name = "qubit-fs"
-version = "0.3.3"
+version = "0.4.0"
 dependencies = [
  "fluent-uri",
  "qubit-budget",
  "qubit-io",
+ "qubit-operation",
  "qubit-redact",
 ]
 
 [[package]]
 name = "qubit-fs-local"
 version = "0.11.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c0d3f69807608b26a4c5a0cc818be3ed688debe5e702186bf8405dd01e480f17"
 dependencies = [
  "qubit-fs",
  "qubit-fs-registry",
@@ -417,14 +416,13 @@ dependencies = [
 
 [[package]]
 name = "qubit-local-files"
-version = "0.5.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6bac96f266a03cd111d56b4f26d5b4eeffe17f07a99e6f92a3822012b8329a9c"
+version = "0.6.0"
 dependencies = [
  "getrandom",
  "libc",
  "qubit-budget",
  "qubit-io",
+ "qubit-operation",
  "qubit-redact",
  "rustix",
  "windows-sys",
@@ -438,6 +436,15 @@ checksum = "d924460f6338fba50b9ac3bd213af403eefe026c7f9eff4201d137a3ab0affef"
 dependencies = [
  "parking_lot",
  "qubit-clock",
+]
+
+[[package]]
+name = "qubit-operation"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a168736d00191891adfd90804caf5718983ee40a0977ccfc2a975abc87f58dd0"
+dependencies = [
+ "qubit-budget",
 ]
 
 [[package]]
